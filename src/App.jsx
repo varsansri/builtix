@@ -9,7 +9,7 @@ import ExtraKeysBar from './components/ExtraKeysBar.jsx'
 import InputBar from './components/InputBar.jsx'
 import ActionBar from './components/ActionBar.jsx'
 
-import { streamChat } from './services/api.js'
+import { streamChat, detectBridge, isBridgeActive } from './services/api.js'
 import { startVoice, stopVoice, isVoiceSupported } from './services/voice.js'
 import { parseCommand, getHelpText } from './utils/commandParser.js'
 import { TERMINAL_THEME } from './constants/theme.js'
@@ -96,6 +96,7 @@ export default function App() {
   const activeTabIdRef = useRef(firstTab.id)
 
   const [input, setInput] = useState('')
+  const [bridgeActive, setBridgeActive] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [snakeActive, setSnakeActive] = useState(false)
   const snakeRef = useRef(null)
@@ -111,6 +112,17 @@ export default function App() {
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
+
+  // auto-detect local bridge on load, re-check every 10s
+  useEffect(() => {
+    async function check() {
+      const active = await detectBridge()
+      setBridgeActive(active)
+    }
+    check()
+    const id = setInterval(check, 10000)
+    return () => clearInterval(id)
+  }, [])
 
   // live elapsed timer while running
   useEffect(() => {
@@ -562,6 +574,7 @@ export default function App() {
         project={activeTab?.name || ''}
         isRunning={isRunning}
         onCopy={handleCopy}
+        bridgeActive={bridgeActive}
       />
       <TabBar
         tabs={tabs}

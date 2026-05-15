@@ -1,17 +1,33 @@
 const VERCEL_BASE = import.meta.env.VITE_API_URL || '/api'
+const LOCAL_URL = 'http://localhost:3001'
+
+let _bridgeActive = false
+
+export function isBridgeActive() { return _bridgeActive }
+
+export async function detectBridge() {
+  try {
+    const res = await fetch(`${LOCAL_URL}/health`, {
+      signal: AbortSignal.timeout(2000),
+    })
+    if (!res.ok) { _bridgeActive = false; return false }
+    const d = await res.json()
+    _bridgeActive = d.ok === true
+    return _bridgeActive
+  } catch {
+    _bridgeActive = false
+    return false
+  }
+}
 
 function getBase() {
-  try {
-    const local = localStorage.getItem('builtix_bridge_url')
-    if (local) return local.replace(/\/$/, '') + '/api'
-  } catch {}
-  return VERCEL_BASE
+  return _bridgeActive ? LOCAL_URL : VERCEL_BASE
 }
 
 export async function streamChat({ messages, sessionId, onEvent, onError, signal }) {
   let response
   try {
-    response = await fetch(`${getBase()}/chat`, {
+    response = await fetch(`${getBase()}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, sessionId }),
@@ -46,28 +62,4 @@ export async function streamChat({ messages, sessionId, onEvent, onError, signal
       } catch {}
     }
   }
-}
-
-export async function checkBridge(url) {
-  try {
-    const res = await fetch(url.replace(/\/$/, '') + '/health', {
-      signal: AbortSignal.timeout(4000),
-    })
-    if (!res.ok) return false
-    const d = await res.json()
-    return d.ok === true
-  } catch {
-    return false
-  }
-}
-
-export function getBridgeUrl() {
-  try { return localStorage.getItem('builtix_bridge_url') || '' } catch { return '' }
-}
-
-export function setBridgeUrl(url) {
-  try {
-    if (url) localStorage.setItem('builtix_bridge_url', url)
-    else localStorage.removeItem('builtix_bridge_url')
-  } catch {}
 }
