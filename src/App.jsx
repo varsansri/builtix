@@ -453,12 +453,12 @@ export default function App() {
 }
 
 const styles = {
-  root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: '#000', overflow: 'hidden' },
+  root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: 'var(--bg)', overflow: 'hidden' },
   terminal: { flex: 1, overflow: 'hidden', minHeight: 0 },
   toast: {
-    position: 'absolute', top: 82, left: '50%', transform: 'translateX(-50%)',
-    background: '#00ff41', color: '#000', fontFamily: 'monospace',
-    fontSize: 12, fontWeight: 700, padding: '4px 14px',
-    borderRadius: 4, zIndex: 100, pointerEvents: 'none',
+    position: 'absolute', top: 88, left: '50%', transform: 'translateX(-50%)',
+    background: '#00ff00', color: '#000', fontFamily: "'Inter', sans-serif",
+    fontSize: 11, fontWeight: 700, padding: '5px 16px',
+    borderRadius: 20, zIndex: 100, pointerEvents: 'none', letterSpacing: 1,
   },
 }

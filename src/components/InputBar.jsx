@@ -9,15 +9,15 @@ const InputBar = forwardRef(function InputBar({ value, onChange, onSubmit, disab
   }
 
   return (
-    <div style={styles.container}>
-      <span style={styles.prompt}>{'>'}</span>
+    <div style={s.container}>
+      <span style={s.prompt}>{'>'}</span>
       <input
         ref={ref}
-        style={{ ...styles.input, ...(disabled ? styles.inputDisabled : {}) }}
+        style={{ ...s.input, ...(disabled ? s.inputDisabled : {}) }}
         value={voicePreview || value}
         onChange={e => onChange(e.target.value)}
         onKeyDown={handleKey}
-        placeholder={disabled ? 'AI is running...' : 'type command or message...'}
+        placeholder={disabled ? 'Builtix is thinking…' : 'type a command or task…'}
         disabled={disabled}
         autoCapitalize="none"
         autoCorrect="off"
@@ -25,11 +25,16 @@ const InputBar = forwardRef(function InputBar({ value, onChange, onSubmit, disab
         spellCheck={false}
       />
       <button
-        style={{ ...styles.send, ...(disabled ? styles.sendDisabled : {}) }}
+        style={{ ...s.send, ...(disabled ? s.sendDisabled : {}) }}
         onClick={onSubmit}
         disabled={disabled}
       >
-        ↵
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none"
+          stroke={disabled ? 'rgba(255,255,255,0.15)' : '#00ff00'}
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="13 3 8 8 3 3" />
+          <line x1="8" y1="8" x2="8" y2="14" />
+        </svg>
       </button>
     </div>
   )
@@ -37,49 +42,56 @@ const InputBar = forwardRef(function InputBar({ value, onChange, onSubmit, disab
 
 export default InputBar
 
-const styles = {
+const s = {
   container: {
     display: 'flex',
     alignItems: 'center',
-    background: '#080808',
-    borderTop: '1px solid #151515',
-    padding: '6px 10px',
-    gap: 8,
+    background: 'var(--surface)',
+    borderTop: '1px solid var(--border)',
+    padding: '8px 12px',
+    gap: 10,
     flexShrink: 0,
   },
   prompt: {
-    color: '#00ff41',
-    fontFamily: 'monospace',
-    fontSize: 14,
+    color: 'var(--green)',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 15,
     fontWeight: 700,
     flexShrink: 0,
+    lineHeight: 1,
   },
   input: {
     flex: 1,
-    background: 'transparent',
-    border: 'none',
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
     outline: 'none',
-    color: '#e0e0e0',
-    fontFamily: 'monospace',
+    color: 'var(--white75)',
+    fontFamily: "'JetBrains Mono', monospace",
     fontSize: 13,
-    caretColor: '#00ff41',
+    caretColor: 'var(--green)',
+    padding: '7px 12px',
+    transition: 'border-color 0.15s',
   },
-  inputDisabled: { color: '#333' },
+  inputDisabled: {
+    color: 'var(--grey)',
+    cursor: 'not-allowed',
+  },
   send: {
-    width: 30,
-    height: 30,
-    background: 'transparent',
-    border: '1px solid #00ff41',
-    borderRadius: 3,
-    color: '#00ff41',
-    fontFamily: 'monospace',
-    fontSize: 14,
+    width: 34,
+    height: 34,
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+    borderRadius: 9,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     cursor: 'pointer',
     flexShrink: 0,
+    padding: 0,
+    transition: 'border-color 0.15s',
   },
   sendDisabled: {
-    border: '1px solid #222',
-    color: '#333',
     cursor: 'default',
   },
 }

@@ -22,53 +22,62 @@ export default function TabBar({ tabs, activeTab, onSwitch, onNew, onClose, onRe
   }
 
   return (
-    <div style={styles.bar}>
-      <div style={styles.scroll}>
-        {tabs.map(tab => (
-          <div
-            key={tab.id}
-            style={{ ...styles.tab, ...(tab.id === activeTab ? styles.tabActive : {}) }}
-            onPointerDown={() => handlePressStart(tab)}
-            onPointerUp={() => { handlePressEnd(); if (editingId !== tab.id) onSwitch(tab.id) }}
-            onPointerLeave={handlePressEnd}
-          >
-            {editingId === tab.id ? (
-              <input
-                style={styles.renameInput}
-                value={editValue}
-                autoFocus
-                onChange={e => setEditValue(e.target.value)}
-                onBlur={() => handleRenameSubmit(tab.id)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') handleRenameSubmit(tab.id)
-                  if (e.key === 'Escape') setEditingId(null)
-                }}
-                onClick={e => e.stopPropagation()}
-              />
-            ) : (
-              <span style={styles.tabName}>{tab.name}</span>
-            )}
-            {tabs.length > 1 && (
-              <span
-                style={styles.close}
-                onPointerDown={e => { e.stopPropagation(); onClose(tab.id) }}
-              >×</span>
-            )}
-          </div>
-        ))}
-        <button style={styles.newBtn} onPointerDown={e => { e.preventDefault(); onNew() }}>
-          +
+    <div style={s.bar}>
+      <div style={s.scroll}>
+        {tabs.map(tab => {
+          const active = tab.id === activeTab
+          return (
+            <div
+              key={tab.id}
+              style={{ ...s.tab, ...(active ? s.tabActive : {}) }}
+              onPointerDown={() => handlePressStart(tab)}
+              onPointerUp={() => { handlePressEnd(); if (editingId !== tab.id) onSwitch(tab.id) }}
+              onPointerLeave={handlePressEnd}
+            >
+              {editingId === tab.id ? (
+                <input
+                  style={s.renameInput}
+                  value={editValue}
+                  autoFocus
+                  onChange={e => setEditValue(e.target.value)}
+                  onBlur={() => handleRenameSubmit(tab.id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleRenameSubmit(tab.id)
+                    if (e.key === 'Escape') setEditingId(null)
+                  }}
+                  onClick={e => e.stopPropagation()}
+                />
+              ) : (
+                <span style={{ ...s.tabName, ...(active ? s.tabNameActive : {}) }}>
+                  {tab.name}
+                </span>
+              )}
+              {tabs.length > 1 && (
+                <span
+                  style={{ ...s.close, ...(active ? s.closeActive : {}) }}
+                  onPointerDown={e => { e.stopPropagation(); onClose(tab.id) }}
+                >×</span>
+              )}
+            </div>
+          )
+        })}
+
+        <button style={s.newBtn} onPointerDown={e => { e.preventDefault(); onNew() }}>
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="#00ff00" strokeWidth="2" strokeLinecap="round">
+            <line x1="8" y1="3" x2="8" y2="13" />
+            <line x1="3" y1="8" x2="13" y2="8" />
+          </svg>
         </button>
       </div>
     </div>
   )
 }
 
-const styles = {
+const s = {
   bar: {
-    height: 34,
-    background: '#050505',
-    borderBottom: '1px solid #151515',
+    height: 38,
+    background: 'var(--bg)',
+    borderBottom: '1px solid var(--border)',
     flexShrink: 0,
     overflow: 'hidden',
   },
@@ -78,65 +87,69 @@ const styles = {
     height: '100%',
     overflowX: 'auto',
     scrollbarWidth: 'none',
-    gap: 2,
-    padding: '0 6px',
+    gap: 3,
+    padding: '0 8px',
   },
   tab: {
     display: 'flex',
     alignItems: 'center',
     gap: 5,
-    height: 24,
-    padding: '0 8px',
-    borderRadius: 3,
-    border: '1px solid #1a1a1a',
-    background: '#0a0a0a',
+    height: 26,
+    padding: '0 10px',
+    borderRadius: 6,
+    border: '1px solid transparent',
+    background: 'transparent',
     cursor: 'pointer',
     flexShrink: 0,
     userSelect: 'none',
-    WebkitTapHighlightColor: 'transparent',
+    transition: 'background 0.15s',
   },
   tabActive: {
-    border: '1px solid #00ff41',
-    background: '#001a00',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
   },
   tabName: {
-    color: '#888',
-    fontFamily: 'monospace',
+    color: 'var(--grey)',
+    fontFamily: "'Inter', sans-serif",
     fontSize: 11,
-    maxWidth: 90,
+    fontWeight: 500,
+    maxWidth: 100,
     overflow: 'hidden',
     whiteSpace: 'nowrap',
     textOverflow: 'ellipsis',
   },
+  tabNameActive: {
+    color: 'var(--white75)',
+  },
   close: {
-    color: '#444',
+    color: 'var(--grey-dk)',
     fontSize: 14,
     lineHeight: 1,
     padding: '0 2px',
     cursor: 'pointer',
   },
+  closeActive: {
+    color: 'var(--grey)',
+  },
   newBtn: {
-    height: 24,
-    width: 28,
+    height: 26,
+    width: 30,
     background: 'transparent',
-    border: '1px solid #222',
-    borderRadius: 3,
-    color: '#00ff41',
-    fontFamily: 'monospace',
-    fontSize: 16,
-    cursor: 'pointer',
-    flexShrink: 0,
+    border: '1px solid var(--border)',
+    borderRadius: 6,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    cursor: 'pointer',
+    flexShrink: 0,
     padding: 0,
   },
   renameInput: {
     background: 'transparent',
     border: 'none',
     outline: 'none',
-    color: '#00ff41',
-    fontFamily: 'monospace',
+    color: 'var(--green)',
+    fontFamily: "'Inter', sans-serif",
     fontSize: 11,
     width: 80,
     padding: 0,

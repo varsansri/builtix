@@ -1,3 +1,15 @@
+:root {
+  --bg:       #0a1508;
+  --surface:  #131e13;
+  --surface2: #1b271b;
+  --border:   #1e2e1e;
+  --green:    #00ff00;
+  --white:    #ffffff;
+  --white75:  rgba(255,255,255,0.75);
+  --grey:     rgba(255,255,255,0.42);
+  --grey-dk:  rgba(255,255,255,0.12);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -10,20 +22,38 @@ html, body, #root {
   height: 100%;
   height: 100dvh;
   overflow: hidden;
-  background: #000;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  background: var(--bg);
+  font-family: 'Inter', system-ui, sans-serif;
 }
 
 .xterm {
   height: 100%;
-  padding: 8px;
+  padding: 8px 10px;
 }
 
 .xterm-viewport {
   overflow-y: auto !important;
 }
 
-/* scrollbar */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: #000; }
-::-webkit-scrollbar-thumb { background: #1a1a1a; border-radius: 2px; }
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Sonar pulse rings ── */
+@keyframes sonar-ring {
+  0%   { transform: scale(0.78); opacity: 1; }
+  100% { transform: scale(2.2);  opacity: 0; }
+}
+
+.sonar-ring {
+  position: absolute;
+  border: 1.5px solid var(--green);
+  border-radius: 9px;
+  width: 28px;
+  height: 34px;
+  animation: sonar-ring 2s ease-out infinite;
+  pointer-events: none;
+}
+
+.sonar-ring:nth-child(2) { animation-delay: 0.66s; }
+.sonar-ring:nth-child(3) { animation-delay: 1.33s; }
