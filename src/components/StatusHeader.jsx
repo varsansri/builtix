@@ -40,9 +40,10 @@ export default function StatusHeader({ project, isRunning, onCopy, bridgeActive 
           <BLogo size={22} color="#00ff00" glow={isRunning} />
         </div>
         <span style={s.wordmark}>BUILTIX</span>
-        {bridgeActive && (
-          <span style={s.localBadge} title="Connected to local Termux bridge">LOCAL</span>
-        )}
+        {bridgeActive
+          ? <span style={s.localBadge}>LIVE</span>
+          : <span style={s.offlineBadge}>OFFLINE</span>
+        }
       </div>
 
       {/* Right */}
@@ -54,7 +55,7 @@ export default function StatusHeader({ project, isRunning, onCopy, bridgeActive 
             <path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
           </svg>
         </button>
-        <div style={{ ...s.dot, background: isRunning ? '#00ff00' : bridgeActive ? '#44aaff' : 'rgba(255,255,255,0.18)' }} />
+        <div style={{ ...s.dot, background: isRunning ? '#00ff00' : bridgeActive ? '#00ff00' : '#ff444466' }} />
       </div>
 
     </div>
@@ -98,9 +99,20 @@ const s = {
     fontWeight: 700,
     fontFamily: "'Inter', sans-serif",
     letterSpacing: 1,
-    color: '#44aaff',
-    background: '#44aaff18',
-    border: '1px solid #44aaff44',
+    color: '#00ff00',
+    background: '#00ff0018',
+    border: '1px solid #00ff0044',
+    borderRadius: 4,
+    padding: '2px 6px',
+  },
+  offlineBadge: {
+    fontSize: 9,
+    fontWeight: 700,
+    fontFamily: "'Inter', sans-serif",
+    letterSpacing: 1,
+    color: '#ff4444',
+    background: '#ff444418',
+    border: '1px solid #ff444444',
     borderRadius: 4,
     padding: '2px 6px',
   },

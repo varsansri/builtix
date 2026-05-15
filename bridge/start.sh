@@ -1,48 +1,88 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Builtix Bridge — run this in Termux to connect your phone to Builtix
+# Builtix Bridge — run this in Termux to power the website for everyone
+
+BRIDGE_TOKEN="${BRIDGE_TOKEN:-builtix-bridge}"
+REGISTRY="https://builtix.vercel.app/api/bridge-url"
+PORT="${PORT:-3001}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  BUILTIX BRIDGE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Check node
-if ! command -v node &> /dev/null; then
-  echo "Installing Node.js..."
-  pkg install -y nodejs
+if ! command -v node &>/dev/null; then pkg install -y nodejs; fi
+
+# Check cloudflared
+if ! command -v cloudflared &>/dev/null; then
+  echo "Installing cloudflared..."
+  pkg install -y cloudflared 2>/dev/null || \
+  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 \
+    -O /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
 fi
 
-# Check claude
-if ! command -v claude &> /dev/null; then
-  echo ""
-  echo "✗ Claude Code CLI not found."
-  echo "  Install it first:"
-  echo "  npm install -g @anthropic-ai/claude-code"
-  echo ""
-  echo "  Then login:"
-  echo "  claude"
-  echo ""
+# Kill any old instances
+pkill -f "node server.js" 2>/dev/null
+pkill -f "cloudflared tunnel" 2>/dev/null
+sleep 1
+
+echo ""
+echo "Starting bridge server..."
+cd "$SCRIPT_DIR"
+node server.js > /tmp/builtix-bridge.log 2>&1 &
+BRIDGE_PID=$!
+echo "Bridge PID: $BRIDGE_PID"
+sleep 2
+
+echo "Starting cloudflared tunnel..."
+cloudflared tunnel --url "http://localhost:$PORT" --no-autoupdate \
+  > /tmp/builtix-tunnel.log 2>&1 &
+TUNNEL_PID=$!
+
+echo "Waiting for tunnel URL..."
+PUBLIC_URL=""
+for i in $(seq 1 30); do
+  sleep 2
+  # cloudflared prints the URL to stderr/stdout in different formats
+  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/builtix-tunnel.log 2>/dev/null | head -1)
+  if [ -n "$URL" ]; then
+    PUBLIC_URL="$URL"
+    break
+  fi
+done
+
+if [ -z "$PUBLIC_URL" ]; then
+  echo "✗ Could not get tunnel URL. Check /tmp/builtix-tunnel.log"
+  cat /tmp/builtix-tunnel.log | tail -20
   exit 1
 fi
 
-echo "✓ Node.js: $(node --version)"
-echo "✓ Claude Code: $(claude --version 2>/dev/null || echo 'found')"
 echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✓ Tunnel: $PUBLIC_URL"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Get local IP
-IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I 2>/dev/null | awk '{print $1}')
-PORT=${PORT:-3001}
+# Register URL with Vercel so everyone gets it
+echo "Registering with builtix.vercel.app..."
+RESULT=$(curl -s -X POST "$REGISTRY" \
+  -H "Content-Type: application/json" \
+  -H "x-bridge-token: $BRIDGE_TOKEN" \
+  -d "{\"url\": \"$PUBLIC_URL\"}")
+
+if echo "$RESULT" | grep -q '"ok":true'; then
+  echo "✓ Registered — everyone who opens Builtix"
+  echo "  will now connect through your phone!"
+else
+  echo "⚠ Could not register: $RESULT"
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Open Builtix → tap 🔌 LOCAL → enter:"
 echo ""
-echo "  http://localhost:${PORT}"
-echo ""
-echo "  (or from another device on same WiFi)"
-echo "  http://${IP}:${PORT}"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Keep this terminal open."
+echo "  Press Ctrl+C to stop."
 echo ""
 
-# Go to bridge folder and start
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-node server.js
+# Keep alive and show bridge logs
+tail -f /tmp/builtix-bridge.log &
+
+wait $BRIDGE_PID
