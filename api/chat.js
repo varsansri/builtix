@@ -143,6 +143,64 @@ async function bash(sd, { command, timeout = 20000 }, onLine) {
   })
 }
 
+const PISTON_LANGS = {
+  python: { id: 'python',     ext: 'main.py'   },
+  py:     { id: 'python',     ext: 'main.py'   },
+  cpp:    { id: 'c++',        ext: 'main.cpp'  },
+  'c++':  { id: 'c++',        ext: 'main.cpp'  },
+  c:      { id: 'c',          ext: 'main.c'    },
+  java:   { id: 'java',       ext: 'Main.java' },
+  go:     { id: 'go',         ext: 'main.go'   },
+  rust:   { id: 'rust',       ext: 'main.rs'   },
+  ruby:   { id: 'ruby',       ext: 'main.rb'   },
+  php:    { id: 'php',        ext: 'main.php'  },
+  swift:  { id: 'swift',      ext: 'main.swift'},
+  kotlin: { id: 'kotlin',     ext: 'main.kt'   },
+  ts:     { id: 'typescript', ext: 'main.ts'   },
+  typescript: { id: 'typescript', ext: 'main.ts'},
+  js:     { id: 'javascript', ext: 'main.js'   },
+  javascript: { id: 'javascript', ext: 'main.js'},
+  node:   { id: 'javascript', ext: 'main.js'   },
+  bash:   { id: 'bash',       ext: 'main.sh'   },
+  sh:     { id: 'bash',       ext: 'main.sh'   },
+}
+
+async function execute_code(_, { language, code, stdin = '' }) {
+  const key = (language || '').toLowerCase().replace(/\s/g, '')
+  const lang = PISTON_LANGS[key]
+  if (!lang) return `✗ Unsupported language: ${language}`
+
+  try {
+    const res = await fetch('https://emkc.org/api/v2/piston/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        language: lang.id,
+        version: '*',
+        files: [{ name: lang.ext, content: code }],
+        stdin,
+        run_timeout: 10000,
+        compile_timeout: 15000,
+      }),
+      signal: AbortSignal.timeout(35000),
+    })
+
+    if (!res.ok) return `✗ Piston error: ${res.status}`
+    const d = await res.json()
+
+    const out = []
+    if (d.compile?.output?.trim()) out.push(`── compile ──\n${d.compile.output.trim()}`)
+    if (d.run?.stdout?.trim())     out.push(d.run.stdout.trim())
+    if (d.run?.stderr?.trim())     out.push(`── stderr ──\n${d.run.stderr.trim()}`)
+    if (d.run?.code !== 0)         out.push(`✗ Exit code: ${d.run.code}`)
+    else if (!out.length)          out.push('✓ Program ran with no output')
+
+    return out.join('\n')
+  } catch (e) {
+    return `✗ ${e.message}`
+  }
+}
+
 async function web_search(_, { query }) {
   try {
     const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
@@ -167,7 +225,7 @@ async function web_fetch(_, { url }) {
 
 const TOOLS = {
   read_file, write_file, edit_file, list_directory,
-  create_directory, delete_file, bash, web_search, web_fetch
+  create_directory, delete_file, bash, web_search, web_fetch, execute_code
 }
 
 const TOOL_DEFS = [
@@ -180,6 +238,7 @@ const TOOL_DEFS = [
   { type:'function', function:{ name:'bash', description:'Run a shell command. Use for running scripts, installing packages, git, testing code.', parameters:{ type:'object', properties:{ command:{type:'string'}, timeout:{type:'number'} }, required:['command'] } } },
   { type:'function', function:{ name:'web_search', description:'Search the web.', parameters:{ type:'object', properties:{ query:{type:'string'} }, required:['query'] } } },
   { type:'function', function:{ name:'web_fetch', description:'Fetch URL content.', parameters:{ type:'object', properties:{ url:{type:'string'} }, required:['url'] } } },
+  { type:'function', function:{ name:'execute_code', description:'Compile and run code in any language via Piston cloud executor. Use for Python, C++, Java, Go, Rust, Ruby, PHP, Swift, Kotlin, TypeScript. Returns real compiler output + stdout + stderr. For interactive programs pass sample stdin values. AI picks the best language for the task.', parameters:{ type:'object', properties:{ language:{type:'string', description:'python, cpp, c, java, go, rust, ruby, php, swift, kotlin, typescript, javascript, bash'}, code:{type:'string', description:'Complete source code'}, stdin:{type:'string', description:'Sample input for interactive programs, newline-separated'} }, required:['language','code'] } } },
 ]
 
 const SYSTEM = `You are Builtix — a mobile AI terminal that EXECUTES real tasks like Claude Code.
@@ -218,10 +277,26 @@ FOLLOW-UP DETECTION (check conversation history):
 - Question about what was built → explain it clearly
 - New unrelated task → start fresh
 
+CODE EXECUTION:
+- Use execute_code for ALL runnable programs
+- Pick the BEST language for the task:
+  calculator/script → python
+  performance/systems → cpp or go
+  web/api → javascript
+  data/ml → python
+  user said a specific language → use that
+- write_file first so user can see the code
+- then execute_code to compile and run it
+- For interactive programs: look at what inputs
+  the code needs, put sample values in stdin
+  so the output shows real results
+- If it fails: read the error, fix the code,
+  execute again automatically — never give up
+
 STRICT RULES — never break:
-- NEVER fake output — use bash to actually compile/run/test
+- NEVER fake output — use execute_code for real results
 - NEVER say "I would" or "you could" — just DO IT
-- NEVER use markdown (no ** ## or backticks in responses)
+- NEVER use markdown (no ** ## or backticks)
 - Lines under 50 chars for mobile
 - Symbols: ● step  ↳ substep  ✓ done  ✗ error  ⚠ warn`
 
@@ -296,8 +371,10 @@ export default async function handler(req, res) {
 
         let result
         if (name === 'bash') {
-          // Stream each output line live as it prints
           result = await TOOLS.bash(sd, args, (line) => send({ type: 'bash_line', text: line }))
+        } else if (name === 'execute_code') {
+          result = await TOOLS.execute_code(sd, args)
+          result.split('\n').forEach(line => send({ type: 'bash_line', text: line }))
         } else {
           result = await (TOOLS[name]?.(sd, args) ?? `✗ Unknown tool: ${name}`)
           send({ type: 'tool_result', text: result })

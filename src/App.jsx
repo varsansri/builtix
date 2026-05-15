@@ -100,6 +100,8 @@ export default function App() {
   const [snakeActive, setSnakeActive] = useState(false)
   const snakeRef = useRef(null)
   const [taskName, setTaskName] = useState('')
+  const [elapsed, setElapsed] = useState(0)
+  const timerRef = useRef(null)
   const [isListening, setIsListening] = useState(false)
   const [voicePreview, setVoicePreview] = useState('')
   const [attachment, setAttachment] = useState(null)
@@ -109,6 +111,17 @@ export default function App() {
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
+
+  // live elapsed timer while running
+  useEffect(() => {
+    if (isRunning) {
+      setElapsed(0)
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
+    } else {
+      clearInterval(timerRef.current)
+    }
+    return () => clearInterval(timerRef.current)
+  }, [isRunning])
 
   useEffect(() => {
     const term = new Terminal({
@@ -564,6 +577,8 @@ export default function App() {
           <span style={styles.taskDot}>●</span>
           <span style={styles.taskLabel}>{taskName || 'Working…'}</span>
           <span style={styles.taskSep}>·</span>
+          <span style={styles.taskTimer}>{elapsed}s</span>
+          <span style={styles.taskSep}>·</span>
           <button style={styles.escBtn} onPointerDown={e => { e.preventDefault(); handleStop() }}>
             ESC to stop
           </button>
@@ -635,6 +650,13 @@ const styles = {
   taskSep: {
     color: 'rgba(255,255,255,0.2)',
     fontSize: 11,
+  },
+  taskTimer: {
+    color: '#00ff00',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    fontWeight: 700,
+    minWidth: 28,
   },
   escBtn: {
     background: 'transparent',
