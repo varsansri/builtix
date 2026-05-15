@@ -1,509 +1,203 @@
 import http from 'http'
-import https from 'https'
 import fs from 'fs/promises'
 import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-// Load .env from bridge/ folder if present
-try {
-  const env = await fs.readFile(path.join(__dirname, '.env'), 'utf8')
-  for (const line of env.split('\n')) {
-    const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
-  }
-} catch {}
-
 const PORT = process.env.PORT || 3001
-const SESSION_BASE = path.join(process.env.HOME || '/tmp', '.builtix-sessions')
-const CREDS_PATH = path.join(process.env.HOME || '/root', '.claude', '.credentials.json')
 
-// ── Credentials ──────────────────────────────────────────────────────
+// ── Persistent Claude Code process ───────────────────────────────────
+// One process stays alive. Each request writes a message to its stdin.
+// Claude Code streams back events. No API calls from the bridge itself.
 
-async function getToken() {
-  try {
-    const raw = await fs.readFile(CREDS_PATH, 'utf8')
-    const creds = JSON.parse(raw)
-    const token = creds?.claudeAiOauth?.accessToken
-    if (!token) throw new Error('No access token found')
-    return token
-  } catch (e) {
-    throw new Error(`Cannot read credentials: ${e.message}`)
-  }
-}
+const SYSTEM_APPEND = `You are Builtix — a mobile AI terminal running in Termux.
 
-// ── Direct Anthropic API call with streaming ─────────────────────────
+INTENT DETECTION (decide silently):
+- QUESTION → answer in plain text, no tools
+- TASK → execute immediately using tools
 
-const SYSTEM = `You are Builtix — a mobile AI terminal that EXECUTES real tasks like Claude Code.
+IF TASK → start with:
+● [what you are doing]
+  ↳ [step]
+  ↳ [step]
 
-INTENT DETECTION (decide this silently for every message):
-- QUESTION: what/why/how/explain/compare → answer in plain text, NO tools
-- TASK: create/build/write/run/fix/install/make/generate → execute for real using tools
+Use Bash for ALL code execution. Real Termux: python3, node, gcc, git, apt.
+write_file first, then Bash to run it. Fix errors automatically.
 
-IF QUESTION → answer directly. Short lines. No markdown. Done.
-
-IF TASK → start IMMEDIATELY with this exact format:
-● [what you are doing right now]
-  ↳ [step 1]
-  ↳ [step 2]
-  ↳ [step 3]
-
-Then use tools to execute each step. Announce each step before calling the tool:
-● Writing [filename]...
-● Compiling...
-● Running...
-● Installing...
-
-If a step FAILS → fix it automatically, keep going, show the fix.
-Never ask permission to continue — just do it.
-
-AFTER EVERY COMPLETED TASK — always end with:
+After task done:
 ────────────────────────────────
-✓ Done — [one line summary]
+✓ Done — [summary]
 ────────────────────────────────
 Built: [what was created]
-How to use: [clear instructions]
+How to use: [instructions]
 ────────────────────────────────
 
-CODE EXECUTION:
-- Use bash tool for ALL runnable programs (python, node, gcc are available in Termux)
-- Pick the BEST language for the task
-- write_file first so user can see the code
-- then bash to compile and run it
-- If it fails: read the error, fix the code, run again — never give up
-
-STRICT RULES — never break:
-- NEVER fake output — use bash for real results
+RULES:
 - NEVER say "I would" or "you could" — just DO IT
-- NEVER use markdown (no ** ## or backticks)
+- No markdown (no ** ## backticks)
 - Lines under 50 chars for mobile
-- Symbols: ● step  ↳ substep  ✓ done  ✗ error  ⚠ warn`
+- Symbols: ● step  ↳ substep  ✓ done  ✗ error`
 
-const TOOL_DEFS = [
-  { name: 'read_file', description: 'Read file contents with line numbers.', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
-  { name: 'write_file', description: 'Create or overwrite a file.', input_schema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } },
-  { name: 'edit_file', description: 'Replace exact text in a file.', input_schema: { type: 'object', properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } }, required: ['path', 'old_string', 'new_string'] } },
-  { name: 'list_directory', description: 'List files in a directory.', input_schema: { type: 'object', properties: { path: { type: 'string' } } } },
-  { name: 'bash', description: 'Run shell commands. python3, node, gcc, git, apt all available.', input_schema: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] } },
-  { name: 'web_search', description: 'Search the web.', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
-]
+let claudeProc = null
+let procReady = false
+let initDone = false
+const requestQueue = []
+let activeRequest = null
+let outputBuf = ''
 
-// ── Groq fallback (llama-3.3-70b) ───────────────────────────────────
+function spawnClaude() {
+  procReady = false
+  initDone = false
+  outputBuf = ''
 
-const GROQ_KEYS = [
-  process.env.GROQ_KEY_1,
-  process.env.GROQ_KEY_2,
-  process.env.GROQ_KEY_3,
-  process.env.GROQ_KEY_4,
-  process.env.GROQ_KEY,
-].filter(Boolean)
-
-let groqKeyIndex = 0
-
-function getGroqKey() { return GROQ_KEYS[groqKeyIndex % GROQ_KEYS.length] }
-function nextGroqKey() { groqKeyIndex++ }
-
-const GROQ_TOOL_DEFS = TOOL_DEFS.map(t => ({
-  type: 'function',
-  function: {
-    name: t.name,
-    description: t.description,
-    parameters: t.input_schema,
-  },
-}))
-
-async function callGroq(messages) {
-  const key = getGroqKey()
-  if (!key) throw new Error('No Groq key available. Set GROQ_KEY env var.')
-
-  const body = JSON.stringify({
-    model: 'llama-3.3-70b-versatile',
-    messages: [{ role: 'system', content: SYSTEM }, ...messages],
-    tools: GROQ_TOOL_DEFS,
-    tool_choice: 'auto',
-    max_tokens: 4096,
-    stream: true,
+  claudeProc = spawn('claude', [
+    '-p',
+    '--input-format', 'stream-json',
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--permission-mode', 'auto',
+    '--append-system-prompt', SYSTEM_APPEND,
+  ], {
+    env: { ...process.env },
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
 
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.groq.com',
-      path: '/openai/v1/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${key}`,
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, resolve)
-    req.on('error', reject)
-    req.write(body)
-    req.end()
-  })
-}
+  claudeProc.stdout.on('data', onClaudeData)
 
-// ── Anthropic direct API ─────────────────────────────────────────────
-
-async function callAnthropic(token, messages) {
-  const body = JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    system: SYSTEM,
-    tools: TOOL_DEFS,
-    tool_choice: { type: 'auto' },
-    messages,
-    stream: true,
+  claudeProc.stderr.on('data', d => {
+    const text = d.toString().trim()
+    if (text) console.error('[claude stderr]', text)
   })
 
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'Authorization': `Bearer ${token}`,
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, resolve)
-    req.on('error', reject)
-    req.write(body)
-    req.end()
+  claudeProc.on('exit', (code) => {
+    console.log(`[bridge] claude exited (${code}), restarting…`)
+    procReady = false
+    initDone = false
+    setTimeout(spawnClaude, 1000)
   })
+
+  claudeProc.on('error', err => {
+    console.error('[bridge] spawn error:', err.message)
+    setTimeout(spawnClaude, 2000)
+  })
+
+  // Send warmup ping — triggers system init event and loads context
+  const warmup = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: '.' }] },
+  })
+  claudeProc.stdin.write(warmup + '\n')
+  console.log('[bridge] claude started, warming up…')
 }
 
-// ── Session filesystem ───────────────────────────────────────────────
+function onClaudeData(chunk) {
+  outputBuf += chunk.toString()
+  const lines = outputBuf.split('\n')
+  outputBuf = lines.pop()
 
-async function sessionDir(sessionId) {
-  const dir = path.join(SESSION_BASE, sessionId.replace(/[^a-z0-9_-]/gi, '_'))
-  await fs.mkdir(dir, { recursive: true })
-  return dir
-}
+  for (const line of lines) {
+    if (!line.trim()) continue
+    let ev
+    try { ev = JSON.parse(line) } catch { continue }
 
-function safe(base, p) {
-  const r = path.resolve(base, p)
-  if (!r.startsWith(base)) throw new Error('Path outside session')
-  return r
-}
+    // First system init event
+    if (!initDone && ev.type === 'system' && ev.subtype === 'init') {
+      initDone = true
+      console.log('[bridge] session:', ev.session_id)
+      continue
+    }
 
-// ── Tools ────────────────────────────────────────────────────────────
+    // Warmup result → now ready
+    if (!procReady && ev.type === 'result') {
+      procReady = true
+      console.log('[bridge] ready ✓')
+      drain()
+      continue
+    }
 
-async function read_file(sd, { path: p }) {
-  try {
-    const c = await fs.readFile(safe(sd, p), 'utf8')
-    return c.split('\n').map((l, i) => `${String(i+1).padStart(4)} │ ${l}`).join('\n')
-  } catch (e) { return `✗ ${e.message}` }
-}
+    // Skip rate_limit_event noise
+    if (ev.type === 'rate_limit_event') continue
 
-async function write_file(sd, { path: p, content }) {
-  const f = safe(sd, p)
-  await fs.mkdir(path.dirname(f), { recursive: true })
-  await fs.writeFile(f, content, 'utf8')
-  return `✓ Created: ${p} (${content.split('\n').length} lines)`
-}
+    // Route to active request
+    if (!activeRequest) continue
+    const { send, resolve } = activeRequest
 
-async function edit_file(sd, { path: p, old_string, new_string }) {
-  try {
-    const c = await fs.readFile(safe(sd, p), 'utf8')
-    if (!c.includes(old_string)) return `✗ Text not found in ${p}`
-    await fs.writeFile(safe(sd, p), c.replace(old_string, new_string), 'utf8')
-    return `✓ Edited: ${p}`
-  } catch (e) { return `✗ ${e.message}` }
-}
-
-async function list_directory(sd, { path: p = '.' }) {
-  try {
-    const entries = await fs.readdir(safe(sd, p), { withFileTypes: true })
-    if (!entries.length) return '(empty)'
-    return entries.map(e => `  ${e.isDirectory() ? '📁' : '📄'} ${e.name}`).join('\n')
-  } catch (e) { return `✗ ${e.message}` }
-}
-
-async function bash_tool(sd, { command, timeout = 30000 }, onLine) {
-  const BLOCKED = ['rm -rf /', 'mkfs', ':(){:|:&};:', 'shutdown', 'reboot']
-  if (BLOCKED.some(b => command.includes(b))) return '✗ Blocked command'
-
-  return new Promise((resolve) => {
-    let finished = false
-    let allOutput = ''
-    let buf = ''
-
-    const child = spawn('bash', ['-c', command], {
-      cwd: sd,
-      env: { ...process.env, HOME: process.env.HOME, PWD: sd },
-    })
-
-    const timer = setTimeout(() => {
-      if (finished) return
-      finished = true
-      child.kill('SIGTERM')
-      resolve((allOutput || '').trim() + `\n✗ Timed out after ${timeout / 1000}s`)
-    }, timeout)
-
-    function flush(data) {
-      buf += data.toString()
-      const parts = buf.split('\n')
-      buf = parts.pop()
-      for (const line of parts) {
-        allOutput += line + '\n'
-        onLine?.(line)
+    if (ev.type === 'assistant' && ev.message?.content) {
+      for (const block of ev.message.content) {
+        if (block.type === 'text' && block.text) {
+          block.text.split('\n').forEach(l => send({ type: 'text', text: l }))
+        }
+        if (block.type === 'tool_use') {
+          const preview = JSON.stringify(block.input || {}).slice(0, 40)
+          send({ type: 'text', text: `→ ${block.name}(${preview})` })
+        }
       }
     }
 
-    child.stdout.on('data', flush)
-    child.stderr.on('data', flush)
-
-    child.on('close', () => {
-      if (finished) return
-      finished = true
-      clearTimeout(timer)
-      if (buf) { allOutput += buf; onLine?.(buf) }
-      resolve(allOutput.trim() || '✓ Done (no output)')
-    })
-
-    child.on('error', (err) => {
-      if (finished) return
-      finished = true
-      clearTimeout(timer)
-      resolve(`✗ ${err.message}`)
-    })
-  })
-}
-
-async function web_search(_, { query }) {
-  try {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-    const html = await httpsGet(url, { 'User-Agent': 'Mozilla/5.0' })
-    const results = []
-    const re = /<a class="result__a"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g
-    let m
-    while ((m = re.exec(html)) && results.length < 5)
-      results.push(`• ${m[2].trim()}\n  ${m[1]}`)
-    return results.join('\n\n') || 'No results.'
-  } catch (e) { return `✗ ${e.message}` }
-}
-
-function httpsGet(url, headers = {}) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers }, (res) => {
-      let data = ''
-      res.on('data', d => data += d)
-      res.on('end', () => resolve(data))
-    }).on('error', reject)
-  })
-}
-
-const TOOLS = { read_file, write_file, edit_file, list_directory, bash: bash_tool, web_search }
-
-// ── SSE streaming agentic loop ───────────────────────────────────────
-
-async function streamAnthropicTurn(apiRes, send) {
-  let buf = '', textBuf = '', inputBuf = ''
-  let toolCalls = [], currentTool = null
-
-  await new Promise((resolve, reject) => {
-    apiRes.on('data', chunk => {
-      buf += chunk.toString()
-      const lines = buf.split('\n')
-      buf = lines.pop()
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trim()
-        if (raw === '[DONE]') { resolve(); return }
-        let ev; try { ev = JSON.parse(raw) } catch { continue }
-
-        if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
-          currentTool = { id: ev.content_block.id, name: ev.content_block.name }
-          inputBuf = ''
-        } else if (ev.type === 'content_block_delta') {
-          if (ev.delta?.type === 'text_delta') {
-            textBuf += ev.delta.text || ''
-            const parts = textBuf.split('\n')
-            textBuf = parts.pop()
-            for (const p of parts) send({ type: 'text', text: p })
-          } else if (ev.delta?.type === 'input_json_delta') {
-            inputBuf += ev.delta.partial_json || ''
-          }
-        } else if (ev.type === 'content_block_stop' && currentTool) {
-          let args = {}; try { args = JSON.parse(inputBuf) } catch {}
-          toolCalls.push({ ...currentTool, args })
-          currentTool = null; inputBuf = ''
-        } else if (ev.type === 'message_stop') { resolve() }
-      }
-    })
-    apiRes.on('end', resolve)
-    apiRes.on('error', reject)
-  })
-  if (textBuf.trim()) send({ type: 'text', text: textBuf })
-  return toolCalls
-}
-
-async function streamGroqTurn(apiRes, send) {
-  let buf = '', textBuf = ''
-  const toolMap = {}
-
-  await new Promise((resolve, reject) => {
-    apiRes.on('data', chunk => {
-      buf += chunk.toString()
-      const lines = buf.split('\n')
-      buf = lines.pop()
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trim()
-        if (raw === '[DONE]') { resolve(); return }
-        let ev; try { ev = JSON.parse(raw) } catch { continue }
-        const delta = ev.choices?.[0]?.delta
-        if (!delta) continue
-        if (delta.content) {
-          textBuf += delta.content
-          const parts = textBuf.split('\n')
-          textBuf = parts.pop()
-          for (const p of parts) send({ type: 'text', text: p })
-        }
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (!toolMap[tc.index]) toolMap[tc.index] = { id: tc.id || `tc_${tc.index}`, name: '', args: '' }
-            if (tc.function?.name) toolMap[tc.index].name += tc.function.name
-            if (tc.function?.arguments) toolMap[tc.index].args += tc.function.arguments
-          }
-        }
-        if (ev.choices?.[0]?.finish_reason) resolve()
-      }
-    })
-    apiRes.on('end', resolve)
-    apiRes.on('error', reject)
-  })
-  if (textBuf.trim()) send({ type: 'text', text: textBuf })
-  return Object.values(toolMap).map(tc => {
-    let args = {}; try { args = JSON.parse(tc.args) } catch {}
-    return { id: tc.id, name: tc.name, args }
-  })
-}
-
-async function runAgentLoop(messages, sd, send) {
-  let token = null
-  try { token = await getToken() } catch {}
-
-  const useGroq = !token && GROQ_KEYS.length > 0
-  const conversation = [...messages]
-  // For Groq, conversation stays flat (OpenAI format); for Anthropic, Anthropic format
-  const groqConversation = [...messages]
-
-  for (let turn = 0; turn < 20; turn++) {
-    let toolCalls = []
-    let usedGroq = false
-
-    // Try Anthropic first, fall back to Groq on 429
-    if (token) {
-      const apiRes = await callAnthropic(token, conversation)
-      if (apiRes.statusCode === 429 || apiRes.statusCode === 402) {
-        let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
-        if (GROQ_KEYS.length > 0) {
-          send({ type: 'text', text: '⚠ Claude rate limited, switching to Groq…' })
-          usedGroq = true
-        } else {
-          throw new Error(`Rate limited. No Groq key available as fallback.`)
-        }
-      } else if (apiRes.statusCode !== 200) {
-        let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
-        throw new Error(`API ${apiRes.statusCode}: ${body.slice(0, 150)}`)
-      } else {
-        toolCalls = await streamAnthropicTurn(apiRes, send)
+    if (ev.type === 'tool_result' || ev.type === 'tool_use_result') {
+      const content = ev.content || ev.result || ''
+      if (typeof content === 'string') {
+        content.split('\n').forEach(l => send({ type: 'bash_line', text: l }))
       }
     }
 
-    if (!token || usedGroq) {
-      if (!GROQ_KEYS.length) throw new Error('No Claude token and no Groq key.')
-      usedGroq = true
-      for (let attempt = 0; attempt < GROQ_KEYS.length; attempt++) {
-        const apiRes = await callGroq(groqConversation)
-        if (apiRes.statusCode === 429 && attempt < GROQ_KEYS.length - 1) {
-          nextGroqKey()
-          send({ type: 'text', text: `⚠ Groq key ${attempt+1} limited, trying next…` })
-          continue
-        }
-        if (apiRes.statusCode !== 200) {
-          let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
-          throw new Error(`Groq ${apiRes.statusCode}: ${body.slice(0, 150)}`)
-        }
-        toolCalls = await streamGroqTurn(apiRes, send)
-        break
-      }
-    }
-
-    if (toolCalls.length === 0) return
-
-    // Build assistant message for next turn
-    if (!usedGroq) {
-      conversation.push({
-        role: 'assistant',
-        content: toolCalls.map(tc => ({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args })),
-      })
-    } else {
-      groqConversation.push({
-        role: 'assistant',
-        tool_calls: toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } })),
-      })
-    }
-
-    // Execute tools
-    const anthropicResults = []
-    const groqResults = []
-    for (const tc of toolCalls) {
-      const { id, name, args } = tc
-      const preview = Object.entries(args)[0]
-      send({ type: 'text', text: `→ ${name}(${preview ? `${preview[0]}: "${String(preview[1]).slice(0, 30)}"` : ''})` })
-
-      let result
-      if (name === 'bash') {
-        result = await TOOLS.bash(sd, args, line => send({ type: 'bash_line', text: line }))
-      } else {
-        result = await (TOOLS[name]?.(sd, args) ?? `✗ Unknown tool: ${name}`)
-        send({ type: 'tool_result', text: result })
-      }
-
-      anthropicResults.push({ type: 'tool_result', tool_use_id: id, content: result })
-      groqResults.push({ role: 'tool', tool_call_id: id, content: result })
-    }
-
-    if (!usedGroq) {
-      conversation.push({ role: 'user', content: anthropicResults })
-    } else {
-      groqConversation.push(...groqResults)
+    if (ev.type === 'result') {
+      send({ type: 'done' })
+      resolve()
+      activeRequest = null
+      drain()
     }
   }
-
-  send({ type: 'text', text: '⚠ Max steps reached.' })
 }
 
-// ── HTTP Server ──────────────────────────────────────────────────────
+function drain() {
+  if (activeRequest || !requestQueue.length || !procReady) return
+  const next = requestQueue.shift()
+  activeRequest = next
+  writeMessage(next.messages)
+}
+
+function writeMessage(messages) {
+  // Send full conversation as a single user turn (last user message)
+  // Claude Code maintains its own session context
+  const last = messages.filter(m => m.role === 'user').pop()
+  const text = last?.content || ''
+
+  const msg = JSON.stringify({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text }],
+    },
+  })
+
+  claudeProc.stdin.write(msg + '\n')
+}
+
+// ── HTTP server ───────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, mode: 'direct-api', version: '2.0' }))
+    res.end(JSON.stringify({ ok: true, mode: 'claude-code-pipe', version: '3.0', ready: procReady }))
     return
   }
 
   if (req.method === 'POST' && req.url === '/api/chat') {
     let body = ''
-    req.on('data', chunk => body += chunk)
-    await new Promise(resolve => req.on('end', resolve))
+    req.on('data', c => body += c)
+    await new Promise(r => req.on('end', r))
 
     let parsed
-    try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end('Bad JSON'); return }
+    try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
 
-    const { messages = [], sessionId = 'default' } = parsed
-    const sd = await sessionDir(sessionId)
+    const { messages = [] } = parsed
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -515,20 +209,35 @@ const server = http.createServer(async (req, res) => {
       if (!res.destroyed) res.write(`data: ${JSON.stringify(data)}\n\n`)
     }
 
-    try {
-      await runAgentLoop(messages, sd, send)
-    } catch (err) {
-      send({ type: 'text', text: `✗ Error: ${err.message}` })
+    if (!procReady) {
+      send({ type: 'text', text: '⚠ Claude Code starting up, please wait…' })
+      // Wait up to 30s for process to be ready
+      await new Promise((resolve, reject) => {
+        const interval = setInterval(() => {
+          if (procReady) { clearInterval(interval); resolve() }
+        }, 500)
+        setTimeout(() => { clearInterval(interval); reject(new Error('timeout')) }, 30000)
+      }).catch(() => {
+        send({ type: 'text', text: '✗ Claude Code failed to start' })
+        send({ type: 'done' })
+        res.end()
+      })
+      if (!procReady) return
     }
 
-    send({ type: 'done' })
-    res.end()
+    await new Promise(resolve => {
+      requestQueue.push({ messages, send, resolve })
+      drain()
+    })
+
+    if (!res.destroyed) res.end()
     return
   }
 
-  res.writeHead(404); res.end('Not found')
+  res.writeHead(404); res.end()
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`✓ Builtix bridge v2 (direct API) on http://localhost:${PORT}`)
+  console.log(`✓ Builtix bridge v3 (persistent pipe) on http://localhost:${PORT}`)
+  spawnClaude()
 })
