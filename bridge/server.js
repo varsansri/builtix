@@ -130,10 +130,13 @@ async function runClaudeCode(sd, messages, send) {
 
     const child = spawn('claude', [
       '-p', prompt,
-      '--dangerously-skip-permissions',
+      '--permission-mode', 'auto',
+      '--output-format', 'stream-json',
+      '--verbose',
     ], {
       cwd: sd,
       env: { ...process.env, HOME: process.env.HOME, PWD: sd },
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     let buf = ''
@@ -143,14 +146,31 @@ async function runClaudeCode(sd, messages, send) {
       const parts = buf.split('\n')
       buf = parts.pop()
       for (const line of parts) {
-        send({ type: 'text', text: line })
+        if (!line.trim()) continue
+        try {
+          const ev = JSON.parse(line)
+          // stream-json format from claude --output-format stream-json
+          if (ev.type === 'assistant' && ev.message?.content) {
+            for (const block of ev.message.content) {
+              if (block.type === 'text') {
+                block.text.split('\n').forEach(l => send({ type: 'text', text: l }))
+              }
+            }
+          } else if (ev.type === 'result' && ev.result) {
+            // final result text
+            ev.result.split('\n').forEach(l => send({ type: 'text', text: l }))
+          }
+        } catch {
+          // plain text line
+          send({ type: 'text', text: line })
+        }
       }
     }
 
     child.stdout.on('data', flush)
     child.stderr.on('data', (data) => {
       const text = data.toString().trim()
-      if (text) send({ type: 'text', text: `⚠ ${text}` })
+      if (text && !text.startsWith('⚠')) send({ type: 'text', text: `⚠ ${text}` })
     })
 
     child.on('close', (code) => {
