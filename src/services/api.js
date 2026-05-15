@@ -20,14 +20,14 @@ export async function detectBridge() {
   }
 }
 
-function getBase() {
-  return _bridgeActive ? LOCAL_URL : VERCEL_BASE
+function getChatUrl() {
+  return _bridgeActive ? `${LOCAL_URL}/api/chat` : `${VERCEL_BASE}/chat`
 }
 
 export async function streamChat({ messages, sessionId, onEvent, onError, signal }) {
   let response
   try {
-    response = await fetch(`${getBase()}/api/chat`, {
+    response = await fetch(getChatUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, sessionId }),
