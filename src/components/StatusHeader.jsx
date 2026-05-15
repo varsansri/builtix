@@ -1,6 +1,6 @@
 import React from 'react'
 
-export default function StatusHeader({ project, isRunning }) {
+export default function StatusHeader({ project, isRunning, onCopy }) {
   return (
     <div style={styles.bar}>
       <div style={styles.left}>
@@ -8,6 +8,9 @@ export default function StatusHeader({ project, isRunning }) {
       </div>
       <div style={styles.right}>
         <span style={styles.project}>{project}</span>
+        <button style={styles.copyBtn} onPointerDown={e => { e.preventDefault(); onCopy?.() }} title="Copy selected text">
+          ⎘
+        </button>
         <span style={{ ...styles.dot, background: isRunning ? '#00ff41' : '#333' }} />
         <span style={{ ...styles.status, color: isRunning ? '#00ff41' : '#444' }}>
           {isRunning ? 'RUNNING' : 'IDLE'}
@@ -29,15 +32,24 @@ const styles = {
     flexShrink: 0,
   },
   left: { display: 'flex', alignItems: 'center', gap: 8 },
-  logo: {
-    color: '#00ff41',
+  logo: { color: '#00ff41', fontFamily: 'monospace', fontSize: 13, fontWeight: 700, letterSpacing: 3 },
+  right: { display: 'flex', alignItems: 'center', gap: 8 },
+  project: { color: '#333', fontFamily: 'monospace', fontSize: 10 },
+  copyBtn: {
+    background: 'transparent',
+    border: '1px solid #222',
+    borderRadius: 3,
+    color: '#666',
     fontFamily: 'monospace',
     fontSize: 13,
-    fontWeight: 700,
-    letterSpacing: 3,
+    width: 26,
+    height: 22,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
   },
-  right: { display: 'flex', alignItems: 'center', gap: 6 },
-  project: { color: '#333', fontFamily: 'monospace', fontSize: 10 },
   dot: { width: 6, height: 6, borderRadius: '50%' },
   status: { fontFamily: 'monospace', fontSize: 10, letterSpacing: 1 },
 }

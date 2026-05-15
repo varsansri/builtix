@@ -63,6 +63,7 @@ export default function App() {
   const [project, setProject] = useState('new-project')
   const [cmdHistory, setCmdHistory] = useState([])
   const [histIdx, setHistIdx] = useState(-1)
+  const [copyToast, setCopyToast] = useState(false)
 
   useEffect(() => {
     const term = new Terminal({
@@ -75,6 +76,7 @@ export default function App() {
       scrollback: 10000,
       convertEol: true,
       disableStdin: true,
+      rightClickSelectsWord: true,
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -84,6 +86,18 @@ export default function App() {
     xtermRef.current = term
     fitRef.current = fit
     WELCOME.forEach(line => term.writeln(line))
+
+    // auto-copy selected text on mobile
+    term.onSelectionChange(() => {
+      const sel = term.getSelection()
+      if (sel) {
+        navigator.clipboard?.writeText(sel).then(() => {
+          setCopyToast(true)
+          setTimeout(() => setCopyToast(false), 1500)
+        }).catch(() => {})
+      }
+    })
+
     const ro = new ResizeObserver(() => fit.fit())
     ro.observe(termRef.current)
     return () => { ro.disconnect(); term.dispose() }
@@ -271,9 +285,21 @@ export default function App() {
     }
   }, [histIdx, cmdHistory])
 
+  function handleCopySelected() {
+    const sel = xtermRef.current?.getSelection()
+    if (sel) {
+      navigator.clipboard?.writeText(sel)
+      setCopyToast(true)
+      setTimeout(() => setCopyToast(false), 1500)
+    } else {
+      write('⚠ Select text first, then tap copy.')
+    }
+  }
+
   return (
     <div style={styles.root}>
-      <StatusHeader project={project} isRunning={isRunning} />
+      <StatusHeader project={project} isRunning={isRunning} onCopy={handleCopySelected} />
+      {copyToast && <div style={styles.toast}>✓ Copied</div>}
       <div ref={termRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
       <ExtraKeysBar onKey={handleExtraKey} />
       <InputBar
@@ -300,4 +326,10 @@ export default function App() {
 const styles = {
   root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: '#000', overflow: 'hidden' },
   terminal: { flex: 1, overflow: 'hidden', minHeight: 0 },
+  toast: {
+    position: 'absolute', top: 50, left: '50%', transform: 'translateX(-50%)',
+    background: '#00ff41', color: '#000', fontFamily: 'monospace',
+    fontSize: 12, fontWeight: 700, padding: '4px 14px',
+    borderRadius: 4, zIndex: 100, pointerEvents: 'none',
+  },
 }
