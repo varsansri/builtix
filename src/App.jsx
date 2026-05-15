@@ -196,7 +196,7 @@ export default function App() {
 
   // ── Snake game ──────────────────────────────────────────────────────
 
-  const SCOLS = 28, SROWS = 13
+  const SCOLS = 36, SROWS = 18
 
   function snakeFood(snake) {
     const taken = new Set(snake.map(([r, c]) => `${r},${c}`))
@@ -293,7 +293,7 @@ export default function App() {
         g.snake.pop()
       }
       redrawSnake()
-    }, 150)
+    }, 400)
     return () => clearInterval(id)
   }, [snakeActive])
 
@@ -441,9 +441,12 @@ export default function App() {
       onEvent: (event) => {
         switch (event.type) {
           case 'text':
-            write(event.text)
-            assistantText += event.text + '\n'
-            if (event.text.startsWith('⟹')) decisionLog.current.push(event.text)
+            // text may be a single line or a multi-line block — handle both
+            event.text.split('\n').forEach(l => {
+              write(l)
+              assistantText += l + '\n'
+              if (l.startsWith('⟹')) decisionLog.current.push(l)
+            })
             if (event.text.startsWith('●') && !taskName) {
               setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
             }

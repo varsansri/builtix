@@ -143,9 +143,9 @@ function onData(chunk) {
     // Assistant message — text and tool_use blocks
     if (ev.type === 'assistant' && ev.message?.content) {
       for (const block of ev.message.content) {
-        // Stream text live
+        // Stream text — send whole block, frontend splits lines
         if (block.type === 'text' && block.text) {
-          block.text.split('\n').forEach(l => send({ type: 'text', text: l }))
+          send({ type: 'text', text: block.text })
         }
         // Tool call — show label + start live streaming bash in parallel
         if (block.type === 'tool_use' && !seenToolIds.has(block.id)) {
@@ -211,6 +211,8 @@ function drain() {
 // ── HTTP server ──────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
+  // Disable Nagle's algorithm — send each packet immediately
+  req.socket.setNoDelay(true)
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -235,8 +237,18 @@ const server = http.createServer(async (req, res) => {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',        // tell nginx/cloudflared: don't buffer
+      'X-Content-Type-Options': 'nosniff',
     })
-    const send = d => { if (!res.destroyed) res.write(`data: ${JSON.stringify(d)}\n\n`) }
+    res.flushHeaders()                   // flush immediately, don't wait for first write
+
+    const send = d => {
+      if (!res.destroyed) {
+        res.write(`data: ${JSON.stringify(d)}\n\n`)
+        // Force flush through any remaining Node.js buffering
+        if (res.socket) res.socket.setNoDelay(true)
+      }
+    }
 
     if (!procReady) {
       send({ type: 'text', text: '⚠ Claude starting, please wait…' })
