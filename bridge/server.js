@@ -58,9 +58,11 @@ function spawnClaude() {
     '--verbose',
     '--permission-mode', 'acceptEdits',
     '--allowedTools', 'Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch',
+    '--add-dir', '/root/builtix',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
     env: { ...process.env },
+    cwd: __dirname,   // bridge dir — claude auto-reads CLAUDE.md here
     stdio: ['pipe', 'pipe', 'pipe'],
   })
 
