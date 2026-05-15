@@ -1,6 +1,6 @@
 export const TERMINAL_THEME = {
   background: '#000000',
-  foreground: '#00ff41',
+  foreground: '#ffffff',
   cursor: '#00ff41',
   cursorAccent: '#000000',
   black: '#000000',

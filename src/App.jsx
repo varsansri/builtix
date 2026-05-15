@@ -27,34 +27,56 @@ function makeTab(n) {
   }
 }
 
+const GREEN = '\x1b[32m'
+const WHITE = '\x1b[97m'
+const DIM   = '\x1b[2m'
+const CYAN  = '\x1b[36m'
+const RED   = '\x1b[31m'
+const YELLOW= '\x1b[33m'
+const PURPLE= '\x1b[35m'
+const RESET = '\x1b[0m'
+
+// highlight every occurrence of "builtix" in green (case-insensitive)
+function highlight(line) {
+  return line.replace(/builtix/gi, m => `${GREEN}${m}${RESET}\x1b[97m`)
+}
+
 const WELCOME_LINES = [
   '',
-  '\x1b[32m ██████╗ ██╗   ██╗██╗██╗  ████████╗██╗██╗  ██╗\x1b[0m',
-  '\x1b[32m ██╔══██╗██║   ██║██║██║  ╚══██╔══╝██║╚██╗██╔╝\x1b[0m',
-  '\x1b[32m ██████╔╝██║   ██║██║██║     ██║   ██║ ╚███╔╝ \x1b[0m',
-  '\x1b[32m ██╔══██╗██║   ██║██║██║     ██║   ██║ ██╔██╗ \x1b[0m',
-  '\x1b[32m ██████╔╝╚██████╔╝██║███████╗██║   ██║██╔╝ ██╗\x1b[0m',
-  '\x1b[32m ╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═╝   ╚═╝╚═╝  ╚═╝\x1b[0m',
+  `${GREEN} ██████╗ ██╗   ██╗██╗██╗  ████████╗██╗██╗  ██╗${RESET}`,
+  `${GREEN} ██╔══██╗██║   ██║██║██║  ╚══██╔══╝██║╚██╗██╔╝${RESET}`,
+  `${GREEN} ██████╔╝██║   ██║██║██║     ██║   ██║ ╚███╔╝ ${RESET}`,
+  `${GREEN} ██╔══██╗██║   ██║██║██║     ██║   ██║ ██╔██╗ ${RESET}`,
+  `${GREEN} ██████╔╝╚██████╔╝██║███████╗██║   ██║██╔╝ ██╗${RESET}`,
+  `${GREEN} ╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═╝   ╚═╝╚═╝  ╚═╝${RESET}`,
   '',
-  '\x1b[2m Build anything. From your phone.\x1b[0m',
-  '\x1b[2m ─────────────────────────────────\x1b[0m',
-  ' /help   → all commands & shortcuts',
-  ' /ls     → list files',
-  ' 🎙 VOICE → speak your task',
-  '\x1b[2m ─────────────────────────────────\x1b[0m',
+  `${WHITE}> Welcome to ${GREEN}Builtix${RESET}${WHITE} — build anything from your phone.${RESET}`,
+  `${DIM}> ─────────────────────────────────${RESET}`,
+  `${WHITE}> /help   → all commands & shortcuts${RESET}`,
+  `${WHITE}> /ls     → list your files${RESET}`,
+  `${WHITE}> 🎙 VOICE → speak your task to ${GREEN}Builtix${RESET}`,
+  `${DIM}> ─────────────────────────────────${RESET}`,
   '',
 ]
 
 function colorize(line) {
-  if (line.startsWith('✓')) return `\x1b[32m${line}\x1b[0m`
-  if (line.startsWith('✗')) return `\x1b[31m${line}\x1b[0m`
-  if (line.startsWith('⚠')) return `\x1b[33m${line}\x1b[0m`
-  if (line.startsWith('→')) return `\x1b[36m${line}\x1b[0m`
-  if (line.startsWith('[Step')) return `\x1b[97m${line}\x1b[0m`
-  if (line.startsWith('⟹')) return `\x1b[35m${line}\x1b[0m`
-  if (line.startsWith('────')) return `\x1b[2m${line}\x1b[0m`
-  if (line.startsWith('  📁') || line.startsWith('  📄')) return `\x1b[36m${line}\x1b[0m`
-  return line
+  // skip lines that already have ANSI codes (welcome, dividers)
+  if (line.includes('\x1b[')) return line
+
+  const prefix = `${DIM}>${RESET} `
+  const isDiv = line.startsWith('────') || line.startsWith('── ')
+
+  if (isDiv) return `${prefix}${DIM}${line}${RESET}`
+  if (line.startsWith('✓')) return `${prefix}${GREEN}${highlight(line)}${RESET}`
+  if (line.startsWith('✗')) return `${prefix}${RED}${line}${RESET}`
+  if (line.startsWith('⚠')) return `${prefix}${YELLOW}${highlight(line)}${RESET}`
+  if (line.startsWith('→')) return `${prefix}${CYAN}${highlight(line)}${RESET}`
+  if (line.startsWith('[Step')) return `${prefix}${WHITE}${highlight(line)}${RESET}`
+  if (line.startsWith('⟹')) return `${prefix}${PURPLE}${highlight(line)}${RESET}`
+  if (line.startsWith('  📁') || line.startsWith('  📄')) return `${prefix}${CYAN}${line}${RESET}`
+  if (line === '') return ''
+
+  return `${prefix}${WHITE}${highlight(line)}${RESET}`
 }
 
 export default function App() {
