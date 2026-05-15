@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 
 import StatusHeader from './components/StatusHeader.jsx'
+import TabBar from './components/TabBar.jsx'
 import ExtraKeysBar from './components/ExtraKeysBar.jsx'
 import InputBar from './components/InputBar.jsx'
 import ActionBar from './components/ActionBar.jsx'
@@ -13,9 +14,20 @@ import { startVoice, stopVoice, isVoiceSupported } from './services/voice.js'
 import { parseCommand, getHelpText } from './utils/commandParser.js'
 import { TERMINAL_THEME } from './constants/theme.js'
 
-const SESSION_ID = `session_${Date.now()}`
+// shared session so all tabs can read each other's files
+const BASE_SESSION = `s_${Date.now()}`
 
-const WELCOME = [
+function makeTab(n) {
+  return {
+    id: `tab_${Date.now()}_${n}`,
+    name: `terminal-${n}`,
+    conversation: [],
+    lines: [],       // stored as raw strings (with ANSI codes)
+    cmdHistory: [],
+  }
+}
+
+const WELCOME_LINES = [
   '',
   '\x1b[32m ██████╗ ██╗   ██╗██╗██╗  ████████╗██╗██╗  ██╗\x1b[0m',
   '\x1b[32m ██╔══██╗██║   ██║██║██║  ╚══██╔══╝██║╚██╗██╔╝\x1b[0m',
@@ -26,15 +38,14 @@ const WELCOME = [
   '',
   '\x1b[2m Build anything. From your phone.\x1b[0m',
   '\x1b[2m ─────────────────────────────────\x1b[0m',
-  ' /help   → all commands',
-  ' /ls     → list your files',
-  ' 🎙 tap VOICE → speak your task',
+  ' /help   → all commands & shortcuts',
+  ' /ls     → list files',
+  ' 🎙 VOICE → speak your task',
   '\x1b[2m ─────────────────────────────────\x1b[0m',
   '',
 ]
 
 function colorize(line) {
-  if (!line && line !== '') return line
   if (line.startsWith('✓')) return `\x1b[32m${line}\x1b[0m`
   if (line.startsWith('✗')) return `\x1b[31m${line}\x1b[0m`
   if (line.startsWith('⚠')) return `\x1b[33m${line}\x1b[0m`
@@ -53,22 +64,29 @@ export default function App() {
   const inputRef = useRef(null)
   const abortRef = useRef(null)
   const decisionLog = useRef([])
-  const conversationRef = useRef([])
+
+  const firstTab = { ...makeTab(1), lines: [...WELCOME_LINES] }
+  const [tabs, setTabs] = useState([firstTab])
+  const [activeTabId, setActiveTabId] = useState(firstTab.id)
+  const tabsRef = useRef([firstTab])
+  const activeTabIdRef = useRef(firstTab.id)
 
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [voicePreview, setVoicePreview] = useState('')
   const [attachment, setAttachment] = useState(null)
-  const [project, setProject] = useState('new-project')
-  const [cmdHistory, setCmdHistory] = useState([])
   const [histIdx, setHistIdx] = useState(-1)
   const [copyToast, setCopyToast] = useState(false)
+
+  // keep refs in sync
+  useEffect(() => { tabsRef.current = tabs }, [tabs])
+  useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
 
   useEffect(() => {
     const term = new Terminal({
       theme: TERMINAL_THEME,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       fontSize: 13,
       lineHeight: 1.4,
       cursorBlink: true,
@@ -85,9 +103,9 @@ export default function App() {
     fit.fit()
     xtermRef.current = term
     fitRef.current = fit
-    WELCOME.forEach(line => term.writeln(line))
 
-    // auto-copy selected text on mobile
+    WELCOME_LINES.forEach(l => term.writeln(l))
+
     term.onSelectionChange(() => {
       const sel = term.getSelection()
       if (sel) {
@@ -103,9 +121,87 @@ export default function App() {
     return () => { ro.disconnect(); term.dispose() }
   }, [])
 
-  function write(text) { xtermRef.current?.writeln(colorize(text)) }
-  function writeDim(text) { xtermRef.current?.writeln(`\x1b[2m${text}\x1b[0m`) }
+  // ── Terminal write helpers ──────────────────────────────────────────
+
+  function termWrite(raw) {
+    xtermRef.current?.writeln(raw)
+    setTabs(prev => prev.map(t =>
+      t.id === activeTabIdRef.current ? { ...t, lines: [...t.lines, raw] } : t
+    ))
+  }
+
+  function write(text) { termWrite(colorize(text)) }
+  function writeDim(t) { termWrite(`\x1b[2m${t}\x1b[0m`) }
   function writeDivider() { writeDim('────────────────────────────────') }
+
+  function replayTab(tabId) {
+    const tab = tabsRef.current.find(t => t.id === tabId)
+    if (!tab || !xtermRef.current) return
+    xtermRef.current.clear()
+    tab.lines.forEach(l => xtermRef.current.writeln(l))
+    xtermRef.current.scrollToBottom()
+  }
+
+  // ── Tab management ──────────────────────────────────────────────────
+
+  function switchTab(tabId) {
+    if (tabId === activeTabIdRef.current) return
+    setActiveTabId(tabId)
+    activeTabIdRef.current = tabId
+    setInput('')
+    setHistIdx(-1)
+    replayTab(tabId)
+  }
+
+  function newTab() {
+    const n = tabsRef.current.length + 1
+    const tab = { ...makeTab(n), lines: [...WELCOME_LINES] }
+    setTabs(prev => [...prev, tab])
+    tabsRef.current = [...tabsRef.current, tab]
+    switchTab(tab.id)
+  }
+
+  function closeTab(tabId) {
+    const remaining = tabsRef.current.filter(t => t.id !== tabId)
+    setTabs(remaining)
+    tabsRef.current = remaining
+    if (activeTabIdRef.current === tabId) {
+      const next = remaining[remaining.length - 1]
+      setActiveTabId(next.id)
+      activeTabIdRef.current = next.id
+      replayTab(next.id)
+    }
+  }
+
+  function renameTab(tabId, name) {
+    setTabs(prev => prev.map(t => t.id === tabId ? { ...t, name } : t))
+  }
+
+  // ── Active tab data helpers ─────────────────────────────────────────
+
+  function getActiveTab() {
+    return tabsRef.current.find(t => t.id === activeTabIdRef.current)
+  }
+
+  function updateActiveConversation(conv) {
+    setTabs(prev => prev.map(t =>
+      t.id === activeTabIdRef.current ? { ...t, conversation: conv } : t
+    ))
+    tabsRef.current = tabsRef.current.map(t =>
+      t.id === activeTabIdRef.current ? { ...t, conversation: conv } : t
+    )
+  }
+
+  function updateActiveCmdHistory(hist) {
+    setTabs(prev => prev.map(t =>
+      t.id === activeTabIdRef.current ? { ...t, cmdHistory: hist } : t
+    ))
+    tabsRef.current = tabsRef.current.map(t =>
+      t.id === activeTabIdRef.current ? { ...t, cmdHistory: hist } : t
+    )
+  }
+
+  // ── Command handling ────────────────────────────────────────────────
 
   async function handleSubmit() {
     const text = (voicePreview || input).trim()
@@ -113,22 +209,26 @@ export default function App() {
     setInput('')
     setVoicePreview('')
 
-    xtermRef.current?.writeln(`\x1b[32m>\x1b[0m ${text}`)
+    write(`\x1b[32m>\x1b[0m ${text}`)
 
-    const newHist = [text, ...cmdHistory.filter(h => h !== text)].slice(0, 100)
-    setCmdHistory(newHist)
+    const tab = getActiveTab()
+    const newHist = [text, ...tab.cmdHistory.filter(h => h !== text)].slice(0, 100)
+    updateActiveCmdHistory(newHist)
     setHistIdx(-1)
 
     const parsed = parseCommand(text)
 
     if (parsed.type === 'command') {
       switch (parsed.command) {
-        case '/clear': xtermRef.current?.clear(); return
+        case '/clear':
+          xtermRef.current?.clear()
+          setTabs(prev => prev.map(t => t.id === activeTabIdRef.current ? { ...t, lines: [] } : t))
+          return
         case '/new':
           const name = parsed.args || 'new-project'
-          setProject(name)
-          conversationRef.current = []
+          updateActiveConversation([])
           xtermRef.current?.clear()
+          setTabs(prev => prev.map(t => t.id === activeTabIdRef.current ? { ...t, lines: [], name } : t))
           write(`✓ New project: ${name}`)
           return
         case '/history':
@@ -136,7 +236,7 @@ export default function App() {
           newHist.slice(0, 20).forEach((h, i) => write(`  ${i + 1}. ${h}`))
           return
         case '/help':
-          getHelpText().forEach(l => xtermRef.current?.writeln(l))
+          getHelpText().forEach(l => { termWrite(l) })
           return
         case '/why':
           if (!decisionLog.current.length) { write('⚠ Run a task first.'); return }
@@ -159,28 +259,26 @@ export default function App() {
   }
 
   async function sendToAI(userText) {
+    const tab = getActiveTab()
     let content = userText
     if (attachment) {
       content = `File: ${attachment.name}\n\n${attachment.content}\n\nTask: ${userText}`
       setAttachment(null)
     }
 
-    conversationRef.current = [
-      ...conversationRef.current,
-      { role: 'user', content },
-    ]
+    const newConvo = [...tab.conversation, { role: 'user', content }]
+    updateActiveConversation(newConvo)
 
     setIsRunning(true)
     writeDivider()
 
     const controller = new AbortController()
     abortRef.current = controller
-
     let assistantText = ''
 
     await streamChat({
-      messages: conversationRef.current,
-      sessionId: SESSION_ID,
+      messages: newConvo,
+      sessionId: BASE_SESSION,
       signal: controller.signal,
       onEvent: (event) => {
         switch (event.type) {
@@ -189,34 +287,27 @@ export default function App() {
             assistantText += event.text + '\n'
             if (event.text.startsWith('⟹')) decisionLog.current.push(event.text)
             break
-
           case 'tool_call':
-            xtermRef.current?.writeln(`\x1b[36m${event.text}\x1b[0m`)
+            termWrite(`\x1b[36m${event.text}\x1b[0m`)
             break
-
           case 'tool_result':
             writeDim('── result ──')
-            event.text.split('\n').slice(0, 12).forEach(l => writeDim(l))
-            if (event.text.split('\n').length > 12) writeDim('  ...(truncated)')
+            event.text.split('\n').slice(0, 10).forEach(l => writeDim(l))
+            if (event.text.split('\n').length > 10) writeDim('  ...')
             writeDim('────────────')
             break
-
           case 'error':
-            xtermRef.current?.writeln(`\x1b[31m${event.text}\x1b[0m`)
+            termWrite(`\x1b[31m${event.text}\x1b[0m`)
             break
-
           case 'done':
-            conversationRef.current = [
-              ...conversationRef.current,
-              { role: 'assistant', content: assistantText.trim() },
-            ]
+            updateActiveConversation([...newConvo, { role: 'assistant', content: assistantText.trim() }])
             setIsRunning(false)
             writeDivider()
             break
         }
       },
       onError: (err) => {
-        xtermRef.current?.writeln(`\x1b[31m${err}\x1b[0m`)
+        termWrite(`\x1b[31m${err}\x1b[0m`)
         setIsRunning(false)
       },
     })
@@ -236,10 +327,7 @@ export default function App() {
       inputRef.current?.focus()
       return
     }
-    if (!isVoiceSupported()) {
-      write('✗ Use Chrome on Android for voice.')
-      return
-    }
+    if (!isVoiceSupported()) { write('✗ Use Chrome on Android for voice.'); return }
     writeDim('🎙 Listening... tap STOP when done.')
     setIsListening(true)
     startVoice({
@@ -263,42 +351,61 @@ export default function App() {
     el.click()
   }
 
-  const handleExtraKey = useCallback((k) => {
-    if (k.type === 'ctrl') {
-      const key = k.key?.toUpperCase()
-      if (key === 'C' || key === '■') handleStop()
-      if (key === 'L') xtermRef.current?.clear()
-      return
-    }
-    if (k.type === 'esc') { setInput(''); setVoicePreview(''); return }
-    if (k.type === 'history') {
-      const newIdx = k.dir === 'UP'
-        ? Math.min(histIdx + 1, cmdHistory.length - 1)
-        : Math.max(histIdx - 1, -1)
-      setHistIdx(newIdx)
-      setInput(newIdx === -1 ? '' : cmdHistory[newIdx])
-      return
-    }
-    if (k.type === 'insert') {
-      setInput(prev => prev + k.value)
-      inputRef.current?.focus()
-    }
-  }, [histIdx, cmdHistory])
-
-  function handleCopySelected() {
+  function handleCopy() {
     const sel = xtermRef.current?.getSelection()
     if (sel) {
       navigator.clipboard?.writeText(sel)
       setCopyToast(true)
       setTimeout(() => setCopyToast(false), 1500)
     } else {
-      write('⚠ Select text first, then tap copy.')
+      write('⚠ Select text first, then tap ⎘')
     }
   }
 
+  const handleExtraKey = useCallback((k) => {
+    if (k.type === 'ctrl') {
+      const key = k.key?.toUpperCase()
+      if (key === 'C' || key === '■') handleStop()
+      if (key === 'L') {
+        xtermRef.current?.clear()
+        setTabs(prev => prev.map(t => t.id === activeTabIdRef.current ? { ...t, lines: [] } : t))
+      }
+      return
+    }
+    if (k.type === 'esc') { setInput(''); setVoicePreview(''); return }
+    if (k.type === 'history') {
+      const tab = getActiveTab()
+      const hist = tab?.cmdHistory || []
+      const newIdx = k.dir === 'UP'
+        ? Math.min(histIdx + 1, hist.length - 1)
+        : Math.max(histIdx - 1, -1)
+      setHistIdx(newIdx)
+      setInput(newIdx === -1 ? '' : hist[newIdx])
+      return
+    }
+    if (k.type === 'insert') {
+      setInput(prev => prev + k.value)
+      inputRef.current?.focus()
+    }
+  }, [histIdx])
+
+  const activeTab = tabs.find(t => t.id === activeTabId)
+
   return (
     <div style={styles.root}>
-      <StatusHeader project={project} isRunning={isRunning} onCopy={handleCopySelected} />
+      <StatusHeader
+        project={activeTab?.name || ''}
+        isRunning={isRunning}
+        onCopy={handleCopy}
+      />
+      <TabBar
+        tabs={tabs}
+        activeTab={activeTabId}
+        onSwitch={switchTab}
+        onNew={newTab}
+        onClose={closeTab}
+        onRename={renameTab}
+      />
       {copyToast && <div style={styles.toast}>✓ Copied</div>}
       <div ref={termRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
       <ExtraKeysBar onKey={handleExtraKey} />
@@ -327,7 +434,7 @@ const styles = {
   root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: '#000', overflow: 'hidden' },
   terminal: { flex: 1, overflow: 'hidden', minHeight: 0 },
   toast: {
-    position: 'absolute', top: 50, left: '50%', transform: 'translateX(-50%)',
+    position: 'absolute', top: 82, left: '50%', transform: 'translateX(-50%)',
     background: '#00ff41', color: '#000', fontFamily: 'monospace',
     fontSize: 12, fontWeight: 700, padding: '4px 14px',
     borderRadius: 4, zIndex: 100, pointerEvents: 'none',

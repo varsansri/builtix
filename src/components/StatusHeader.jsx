@@ -4,7 +4,11 @@ export default function StatusHeader({ project, isRunning, onCopy }) {
   return (
     <div style={styles.bar}>
       <div style={styles.left}>
-        <span style={styles.logo}>⬛ BUILTIX</span>
+        <span
+          style={styles.logo}
+          onPointerDown={e => { e.preventDefault(); window.location.reload() }}
+          title="Tap to reload"
+        >⬛ BUILTIX</span>
       </div>
       <div style={styles.right}>
         <span style={styles.project}>{project}</span>
