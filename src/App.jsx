@@ -60,21 +60,23 @@ const WELCOME_LINES = [
 ]
 
 function colorize(line) {
-  // skip lines that already have ANSI codes (welcome, dividers)
   if (line.includes('\x1b[')) return line
+  if (line === '') return ''
+
+  // Claude Code-style process lines — no > prefix
+  if (line.startsWith('●'))                        return `${GREEN}${highlight(line)}${RESET}`
+  if (line.match(/^\s+↳/) || line.startsWith('↳')) return `${DIM}${CYAN}${line}${RESET}`
+  if (line.startsWith('────') || line.startsWith('── ')) return `${DIM}${line}${RESET}`
 
   const prefix = `${DIM}>${RESET} `
-  const isDiv = line.startsWith('────') || line.startsWith('── ')
-
-  if (isDiv) return `${prefix}${DIM}${line}${RESET}`
-  if (line.startsWith('✓')) return `${prefix}${GREEN}${highlight(line)}${RESET}`
-  if (line.startsWith('✗')) return `${prefix}${RED}${line}${RESET}`
-  if (line.startsWith('⚠')) return `${prefix}${YELLOW}${highlight(line)}${RESET}`
-  if (line.startsWith('→')) return `${prefix}${CYAN}${highlight(line)}${RESET}`
+  if (line.startsWith('✓')) return `${GREEN}${highlight(line)}${RESET}`
+  if (line.startsWith('✗')) return `${RED}${line}${RESET}`
+  if (line.startsWith('⚠')) return `${YELLOW}${highlight(line)}${RESET}`
+  if (line.startsWith('→')) return `${CYAN}${highlight(line)}${RESET}`
+  if (line.startsWith('Built:') || line.startsWith('How to')) return `${WHITE}${line}${RESET}`
   if (line.startsWith('[Step')) return `${prefix}${WHITE}${highlight(line)}${RESET}`
   if (line.startsWith('⟹')) return `${prefix}${PURPLE}${highlight(line)}${RESET}`
   if (line.startsWith('  📁') || line.startsWith('  📄')) return `${prefix}${CYAN}${line}${RESET}`
-  if (line === '') return ''
 
   return `${prefix}${WHITE}${highlight(line)}${RESET}`
 }
@@ -97,6 +99,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [snakeActive, setSnakeActive] = useState(false)
   const snakeRef = useRef(null)
+  const [taskName, setTaskName] = useState('')
   const [isListening, setIsListening] = useState(false)
   const [voicePreview, setVoicePreview] = useState('')
   const [attachment, setAttachment] = useState(null)
@@ -416,6 +419,9 @@ export default function App() {
             write(event.text)
             assistantText += event.text + '\n'
             if (event.text.startsWith('⟹')) decisionLog.current.push(event.text)
+            if (event.text.startsWith('●') && !taskName) {
+              setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
+            }
             break
           case 'tool_call':
             termWrite(`\x1b[36m${event.text}\x1b[0m`)
@@ -435,6 +441,7 @@ export default function App() {
           case 'done':
             updateActiveConversation([...newConvo, { role: 'assistant', content: assistantText.trim() }])
             setIsRunning(false)
+            setTaskName('')
             writeDivider()
             break
         }
@@ -450,6 +457,7 @@ export default function App() {
     abortRef.current?.abort()
     write('⚠ Stopped.')
     setIsRunning(false)
+    setTaskName('')
   }
 
   function handleMic() {
@@ -551,6 +559,16 @@ export default function App() {
         onRename={renameTab}
       />
       {copyToast && <div style={styles.toast}>✓ Copied</div>}
+      {isRunning && (
+        <div style={styles.taskPill}>
+          <span style={styles.taskDot}>●</span>
+          <span style={styles.taskLabel}>{taskName || 'Working…'}</span>
+          <span style={styles.taskSep}>·</span>
+          <button style={styles.escBtn} onPointerDown={e => { e.preventDefault(); handleStop() }}>
+            ESC to stop
+          </button>
+        </div>
+      )}
       <div ref={termRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
       <ExtraKeysBar onKey={handleExtraKey} />
       <InputBar
@@ -575,12 +593,59 @@ export default function App() {
 }
 
 const styles = {
-  root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: 'var(--bg)', overflow: 'hidden' },
+  root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: 'var(--bg)', overflow: 'hidden', position: 'relative' },
   terminal: { flex: 1, overflow: 'hidden', minHeight: 0 },
   toast: {
     position: 'absolute', top: 88, left: '50%', transform: 'translateX(-50%)',
     background: '#00ff00', color: '#000', fontFamily: "'Inter', sans-serif",
     fontSize: 11, fontWeight: 700, padding: '5px 16px',
     borderRadius: 20, zIndex: 100, pointerEvents: 'none', letterSpacing: 1,
+  },
+  taskPill: {
+    position: 'absolute',
+    bottom: 152,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    background: 'rgba(10,21,8,0.88)',
+    border: '1px solid var(--border)',
+    borderRadius: 20,
+    padding: '6px 14px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    zIndex: 50,
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+    whiteSpace: 'nowrap',
+  },
+  taskDot: {
+    color: '#00ff00',
+    fontSize: 10,
+    animation: 'none',
+  },
+  taskLabel: {
+    color: 'rgba(255,255,255,0.75)',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 11,
+    fontWeight: 500,
+    maxWidth: 160,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  taskSep: {
+    color: 'rgba(255,255,255,0.2)',
+    fontSize: 11,
+  },
+  escBtn: {
+    background: 'transparent',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: 10,
+    color: 'rgba(255,255,255,0.45)',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '2px 8px',
+    cursor: 'pointer',
+    letterSpacing: 0.5,
   },
 }
