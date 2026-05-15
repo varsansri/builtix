@@ -7,6 +7,7 @@ export const COMMANDS = {
   '/history': 'Show command history',
   '/why':     'Show AI decision log for last task',
   '/help':    'Show all commands',
+  '/snake':   'Play Snake using the arrow keys',
 }
 
 export function parseCommand(input) {

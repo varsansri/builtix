@@ -95,6 +95,8 @@ export default function App() {
 
   const [input, setInput] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [snakeActive, setSnakeActive] = useState(false)
+  const snakeRef = useRef(null)
   const [isListening, setIsListening] = useState(false)
   const [voicePreview, setVoicePreview] = useState('')
   const [attachment, setAttachment] = useState(null)
@@ -163,6 +165,109 @@ export default function App() {
     tab.lines.forEach(l => xtermRef.current.writeln(l))
     xtermRef.current.scrollToBottom()
   }
+
+  // ── Snake game ──────────────────────────────────────────────────────
+
+  const SCOLS = 28, SROWS = 13
+
+  function snakeFood(snake) {
+    const taken = new Set(snake.map(([r, c]) => `${r},${c}`))
+    let pos
+    do {
+      pos = [Math.floor(Math.random() * SROWS), Math.floor(Math.random() * SCOLS)]
+    } while (taken.has(`${pos[0]},${pos[1]}`))
+    return pos
+  }
+
+  function buildSnakeFrame() {
+    const g = snakeRef.current
+    if (!g) return []
+    const { snake, food, score } = g
+    const head = `${snake[0][0]},${snake[0][1]}`
+    const body = new Set(snake.map(([r, c]) => `${r},${c}`))
+    const G = '\x1b[32m', BG = '\x1b[92m', R = '\x1b[91m', D = '\x1b[2m', X = '\x1b[0m'
+    const lines = [`${G}╔${'═'.repeat(SCOLS)}╗${X}`]
+    for (let r = 0; r < SROWS; r++) {
+      let row = `${G}║${X}`
+      for (let c = 0; c < SCOLS; c++) {
+        const k = `${r},${c}`
+        if (k === head)          row += `${BG}◉${X}`
+        else if (body.has(k))    row += `${G}█${X}`
+        else if (food && r === food[0] && c === food[1]) row += `${R}◆${X}`
+        else row += ' '
+      }
+      row += `${G}║${X}`
+      lines.push(row)
+    }
+    lines.push(`${G}╚${'═'.repeat(SCOLS)}╝${X}`)
+    lines.push(`${D}  score: ${score}   ↑↓←→ to move   ESC to quit${X}`)
+    return lines
+  }
+
+  function redrawSnake() {
+    const lines = buildSnakeFrame()
+    const up = `\x1b[${lines.length}A`
+    let out = up
+    for (const l of lines) out += `\r\x1b[2K${l}\n`
+    xtermRef.current?.write(out)
+  }
+
+  function startSnake() {
+    const cx = Math.floor(SCOLS / 2), cy = Math.floor(SROWS / 2)
+    const snake = [[cy, cx], [cy, cx - 1], [cy, cx - 2]]
+    snakeRef.current = {
+      snake, dir: [0, 1], nextDir: [0, 1],
+      food: snakeFood(snake), score: 0,
+    }
+    writeDivider()
+    write('🐍 Snake — ↑↓←→ to move · ESC to quit')
+    writeDivider()
+    const lines = buildSnakeFrame()
+    lines.forEach(l => {
+      xtermRef.current?.writeln(l)
+      setTabs(prev => prev.map(t =>
+        t.id === activeTabIdRef.current ? { ...t, lines: [...t.lines, l] } : t
+      ))
+    })
+    setSnakeActive(true)
+  }
+
+  function endSnake(reason) {
+    const score = snakeRef.current?.score ?? 0
+    snakeRef.current = null
+    setSnakeActive(false)
+    write('')
+    write(`✗ ${reason}`)
+    write(`✓ Final score: ${score}`)
+    writeDivider()
+  }
+
+  useEffect(() => {
+    if (!snakeActive) return
+    const id = setInterval(() => {
+      const g = snakeRef.current
+      if (!g) return
+      g.dir = [...g.nextDir]
+      const [hr, hc] = g.snake[0]
+      const nr = hr + g.dir[0], nc = hc + g.dir[1]
+      if (nr < 0 || nr >= SROWS || nc < 0 || nc >= SCOLS) {
+        clearInterval(id); endSnake('Hit the wall!'); return
+      }
+      const bodySet = new Set(g.snake.map(([r, c]) => `${r},${c}`))
+      if (bodySet.has(`${nr},${nc}`)) {
+        clearInterval(id); endSnake('Hit yourself!'); return
+      }
+      g.snake.unshift([nr, nc])
+      if (nr === g.food[0] && nc === g.food[1]) {
+        g.score += 10
+        g.food = snakeFood(g.snake)
+      } else {
+        g.snake.pop()
+      }
+      redrawSnake()
+    }, 150)
+    return () => clearInterval(id)
+  }, [snakeActive])
 
   // ── Tab management ──────────────────────────────────────────────────
 
@@ -260,6 +365,9 @@ export default function App() {
         case '/help':
           getHelpText().forEach(l => { termWrite(l) })
           return
+        case '/snake':
+          startSnake()
+          return
         case '/why':
           if (!decisionLog.current.length) { write('⚠ Run a task first.'); return }
           write('─── Decision Log ───')
@@ -311,6 +419,9 @@ export default function App() {
             break
           case 'tool_call':
             termWrite(`\x1b[36m${event.text}\x1b[0m`)
+            break
+          case 'bash_line':
+            writeDim(event.text)
             break
           case 'tool_result':
             writeDim('── result ──')
@@ -385,6 +496,17 @@ export default function App() {
   }
 
   const handleExtraKey = useCallback((k) => {
+    if (snakeActive) {
+      const g = snakeRef.current
+      if (g) {
+        if (k.type === 'history' && k.dir === 'UP'    && g.dir[0] !== 1)  g.nextDir = [-1, 0]
+        if (k.type === 'history' && k.dir === 'DOWN'  && g.dir[0] !== -1) g.nextDir = [1, 0]
+        if (k.type === 'cursor'  && k.dir === 'LEFT'  && g.dir[1] !== 1)  g.nextDir = [0, -1]
+        if (k.type === 'cursor'  && k.dir === 'RIGHT' && g.dir[1] !== -1) g.nextDir = [0, 1]
+      }
+      if (k.type === 'esc') endSnake('Game quit.')
+      return
+    }
     if (k.type === 'ctrl') {
       const key = k.key?.toUpperCase()
       if (key === 'C' || key === '■') handleStop()
@@ -409,7 +531,7 @@ export default function App() {
       setInput(prev => prev + k.value)
       inputRef.current?.focus()
     }
-  }, [histIdx])
+  }, [histIdx, snakeActive])
 
   const activeTab = tabs.find(t => t.id === activeTabId)
 

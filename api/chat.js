@@ -1,7 +1,7 @@
 import Groq from 'groq-sdk'
 import fs from 'fs/promises'
 import path from 'path'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import { promisify } from 'util'
 import fetch from 'node-fetch'
 
@@ -92,19 +92,55 @@ async function delete_file(sd, { path: p }) {
   catch (e) { return `✗ ${e.message}` }
 }
 
-async function bash(sd, { command, timeout = 20000 }) {
+async function bash(sd, { command, timeout = 20000 }, onLine) {
   const BLOCKED = ['rm -rf /', 'mkfs', ':(){:|:&};:', 'shutdown', 'reboot']
-  if (BLOCKED.some(b => command.includes(b))) return `✗ Blocked command`
-  try {
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: sd, timeout, maxBuffer: 512 * 1024,
+  if (BLOCKED.some(b => command.includes(b))) return '✗ Blocked command'
+
+  return new Promise((resolve) => {
+    let finished = false
+    let allOutput = ''
+    let buf = ''
+
+    const child = spawn('bash', ['-c', command], {
+      cwd: sd,
       env: { ...process.env, HOME: sd, PWD: sd },
     })
-    return [stdout, stderr].filter(Boolean).join('\n').trim() || '✓ Done (no output)'
-  } catch (e) {
-    if (e.killed) return `✗ Timed out after ${timeout/1000}s`
-    return [e.stdout, e.stderr].filter(Boolean).join('\n').trim() || `✗ ${e.message}`
-  }
+
+    const timer = setTimeout(() => {
+      if (finished) return
+      finished = true
+      child.kill('SIGTERM')
+      resolve((allOutput || '').trim() + `\n✗ Timed out after ${timeout / 1000}s`)
+    }, timeout)
+
+    function flush(data) {
+      buf += data.toString()
+      const parts = buf.split('\n')
+      buf = parts.pop()
+      for (const line of parts) {
+        allOutput += line + '\n'
+        onLine?.(line)
+      }
+    }
+
+    child.stdout.on('data', flush)
+    child.stderr.on('data', flush)
+
+    child.on('close', () => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      if (buf) { allOutput += buf; onLine?.(buf) }
+      resolve(allOutput.trim() || '✓ Done (no output)')
+    })
+
+    child.on('error', (err) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      resolve(`✗ ${err.message}`)
+    })
+  })
 }
 
 async function web_search(_, { query }) {
@@ -243,9 +279,15 @@ export default async function handler(req, res) {
         const preview = short ? `${short[0]}: "${String(short[1]).slice(0, 35)}"` : ''
         send({ type: 'text', text: `→ ${name}(${preview})` })
 
-        const result = await (TOOLS[name]?.(sd, args) ?? `✗ Unknown tool: ${name}`)
+        let result
+        if (name === 'bash') {
+          // Stream each output line live as it prints
+          result = await TOOLS.bash(sd, args, (line) => send({ type: 'bash_line', text: line }))
+        } else {
+          result = await (TOOLS[name]?.(sd, args) ?? `✗ Unknown tool: ${name}`)
+          send({ type: 'tool_result', text: result })
+        }
 
-        send({ type: 'tool_result', text: result })
         results.push({ role: 'tool', tool_call_id: tc.id, content: result })
       }
 
