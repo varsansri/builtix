@@ -88,6 +88,24 @@ export default function App() {
   const inputRef = useRef(null)
   const abortRef = useRef(null)
   const decisionLog = useRef([])
+  const audioCtxRef = useRef(null)
+
+  function beep() {
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      const ctx = audioCtxRef.current
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(880, ctx.currentTime)
+      gain.gain.setValueAtTime(0.15, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.08)
+    } catch {}
+  }
+
 
   const firstTab = { ...makeTab(1), lines: [...WELCOME_LINES] }
   const [tabs, setTabs] = useState([firstTab])
@@ -194,9 +212,9 @@ export default function App() {
     xtermRef.current.scrollToBottom()
   }
 
-  // ── Snake game ──────────────────────────────────────────────────────
+  // ── Dragon game ──────────────────────────────────────────────────────
 
-  const SCOLS = 36, SROWS = 18
+  const SCOLS = 42, SROWS = 22
 
   function snakeFood(snake) {
     const taken = new Set(snake.map(([r, c]) => `${r},${c}`))
@@ -228,7 +246,7 @@ export default function App() {
       lines.push(row)
     }
     lines.push(`${G}╚${'═'.repeat(SCOLS)}╝${X}`)
-    lines.push(`${D}  score: ${score}   ↑↓←→ to move   ESC to quit${X}`)
+    lines.push(`${D}  score: ${score}   ↑↓←→ to fly   ESC to quit${X}`)
     return lines
   }
 
@@ -248,7 +266,7 @@ export default function App() {
       food: snakeFood(snake), score: 0,
     }
     writeDivider()
-    write('🐍 Snake — ↑↓←→ to move · ESC to quit')
+    write('🐉 Dragon — ↑↓←→ to fly · ESC to quit')
     writeDivider()
     const lines = buildSnakeFrame()
     lines.forEach(l => {
@@ -266,7 +284,7 @@ export default function App() {
     setSnakeActive(false)
     write('')
     write(`✗ ${reason}`)
-    write(`✓ Final score: ${score}`)
+    write(`✓ Dragon score: ${score}`)
     writeDivider()
   }
 
@@ -293,7 +311,7 @@ export default function App() {
         g.snake.pop()
       }
       redrawSnake()
-    }, 400)
+    }, 650)
     return () => clearInterval(id)
   }, [snakeActive])
 
@@ -393,7 +411,7 @@ export default function App() {
         case '/help':
           getHelpText().forEach(l => { termWrite(l) })
           return
-        case '/snake':
+        case '/dragon':
           startSnake()
           return
         case '/why':
@@ -456,6 +474,7 @@ export default function App() {
             break
           case 'bash_line':
             writeDim(event.text)
+            beep()
             break
           case 'tool_result':
             writeDim('── result ──')
