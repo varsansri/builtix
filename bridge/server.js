@@ -3,6 +3,18 @@ import https from 'https'
 import fs from 'fs/promises'
 import path from 'path'
 import { spawn } from 'child_process'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Load .env from bridge/ folder if present
+try {
+  const env = await fs.readFile(path.join(__dirname, '.env'), 'utf8')
+  for (const line of env.split('\n')) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim()
+  }
+} catch {}
 
 const PORT = process.env.PORT || 3001
 const SESSION_BASE = path.join(process.env.HOME || '/tmp', '.builtix-sessions')
@@ -77,6 +89,62 @@ const TOOL_DEFS = [
   { name: 'bash', description: 'Run shell commands. python3, node, gcc, git, apt all available.', input_schema: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] } },
   { name: 'web_search', description: 'Search the web.', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
 ]
+
+// ── Groq fallback (llama-3.3-70b) ───────────────────────────────────
+
+const GROQ_KEYS = [
+  process.env.GROQ_KEY_1,
+  process.env.GROQ_KEY_2,
+  process.env.GROQ_KEY_3,
+  process.env.GROQ_KEY_4,
+  process.env.GROQ_KEY,
+].filter(Boolean)
+
+let groqKeyIndex = 0
+
+function getGroqKey() { return GROQ_KEYS[groqKeyIndex % GROQ_KEYS.length] }
+function nextGroqKey() { groqKeyIndex++ }
+
+const GROQ_TOOL_DEFS = TOOL_DEFS.map(t => ({
+  type: 'function',
+  function: {
+    name: t.name,
+    description: t.description,
+    parameters: t.input_schema,
+  },
+}))
+
+async function callGroq(messages) {
+  const key = getGroqKey()
+  if (!key) throw new Error('No Groq key available. Set GROQ_KEY env var.')
+
+  const body = JSON.stringify({
+    model: 'llama-3.3-70b-versatile',
+    messages: [{ role: 'system', content: SYSTEM }, ...messages],
+    tools: GROQ_TOOL_DEFS,
+    tool_choice: 'auto',
+    max_tokens: 4096,
+    stream: true,
+  })
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.groq.com',
+      path: '/openai/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, resolve)
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
+}
+
+// ── Anthropic direct API ─────────────────────────────────────────────
 
 async function callAnthropic(token, messages) {
   const body = JSON.stringify({
@@ -232,100 +300,158 @@ const TOOLS = { read_file, write_file, edit_file, list_directory, bash: bash_too
 
 // ── SSE streaming agentic loop ───────────────────────────────────────
 
-async function runAgentLoop(messages, sd, send) {
-  const token = await getToken()
-  const conversation = [...messages]
+async function streamAnthropicTurn(apiRes, send) {
+  let buf = '', textBuf = '', inputBuf = ''
+  let toolCalls = [], currentTool = null
 
-  for (let turn = 0; turn < 20; turn++) {
-    const apiRes = await callAnthropic(token, conversation)
+  await new Promise((resolve, reject) => {
+    apiRes.on('data', chunk => {
+      buf += chunk.toString()
+      const lines = buf.split('\n')
+      buf = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const raw = line.slice(6).trim()
+        if (raw === '[DONE]') { resolve(); return }
+        let ev; try { ev = JSON.parse(raw) } catch { continue }
 
-    if (apiRes.statusCode !== 200) {
-      let errBody = ''
-      await new Promise(r => { apiRes.on('data', d => errBody += d); apiRes.on('end', r) })
-      throw new Error(`API ${apiRes.statusCode}: ${errBody.slice(0, 200)}`)
-    }
+        if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+          currentTool = { id: ev.content_block.id, name: ev.content_block.name }
+          inputBuf = ''
+        } else if (ev.type === 'content_block_delta') {
+          if (ev.delta?.type === 'text_delta') {
+            textBuf += ev.delta.text || ''
+            const parts = textBuf.split('\n')
+            textBuf = parts.pop()
+            for (const p of parts) send({ type: 'text', text: p })
+          } else if (ev.delta?.type === 'input_json_delta') {
+            inputBuf += ev.delta.partial_json || ''
+          }
+        } else if (ev.type === 'content_block_stop' && currentTool) {
+          let args = {}; try { args = JSON.parse(inputBuf) } catch {}
+          toolCalls.push({ ...currentTool, args })
+          currentTool = null; inputBuf = ''
+        } else if (ev.type === 'message_stop') { resolve() }
+      }
+    })
+    apiRes.on('end', resolve)
+    apiRes.on('error', reject)
+  })
+  if (textBuf.trim()) send({ type: 'text', text: textBuf })
+  return toolCalls
+}
 
-    // Parse SSE stream from Anthropic
-    let buf = ''
-    let textBuf = ''
-    let toolCalls = []
-    let currentTool = null
-    let inputBuf = ''
-    let stopReason = null
+async function streamGroqTurn(apiRes, send) {
+  let buf = '', textBuf = ''
+  const toolMap = {}
 
-    await new Promise((resolve, reject) => {
-      apiRes.on('data', chunk => {
-        buf += chunk.toString()
-        const lines = buf.split('\n')
-        buf = lines.pop()
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (raw === '[DONE]') { resolve(); return }
-          let ev
-          try { ev = JSON.parse(raw) } catch { continue }
-
-          if (ev.type === 'content_block_start') {
-            if (ev.content_block?.type === 'tool_use') {
-              currentTool = { id: ev.content_block.id, name: ev.content_block.name }
-              inputBuf = ''
-            }
-          } else if (ev.type === 'content_block_delta') {
-            if (ev.delta?.type === 'text_delta') {
-              const text = ev.delta.text || ''
-              textBuf += text
-              // stream each complete line
-              const parts = textBuf.split('\n')
-              textBuf = parts.pop()
-              for (const part of parts) send({ type: 'text', text: part })
-            } else if (ev.delta?.type === 'input_json_delta') {
-              inputBuf += ev.delta.partial_json || ''
-            }
-          } else if (ev.type === 'content_block_stop') {
-            if (currentTool) {
-              let args = {}
-              try { args = JSON.parse(inputBuf) } catch {}
-              toolCalls.push({ ...currentTool, args })
-              currentTool = null
-              inputBuf = ''
-            }
-          } else if (ev.type === 'message_delta') {
-            stopReason = ev.delta?.stop_reason
-          } else if (ev.type === 'message_stop') {
-            resolve()
+  await new Promise((resolve, reject) => {
+    apiRes.on('data', chunk => {
+      buf += chunk.toString()
+      const lines = buf.split('\n')
+      buf = lines.pop()
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const raw = line.slice(6).trim()
+        if (raw === '[DONE]') { resolve(); return }
+        let ev; try { ev = JSON.parse(raw) } catch { continue }
+        const delta = ev.choices?.[0]?.delta
+        if (!delta) continue
+        if (delta.content) {
+          textBuf += delta.content
+          const parts = textBuf.split('\n')
+          textBuf = parts.pop()
+          for (const p of parts) send({ type: 'text', text: p })
+        }
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (!toolMap[tc.index]) toolMap[tc.index] = { id: tc.id || `tc_${tc.index}`, name: '', args: '' }
+            if (tc.function?.name) toolMap[tc.index].name += tc.function.name
+            if (tc.function?.arguments) toolMap[tc.index].args += tc.function.arguments
           }
         }
+        if (ev.choices?.[0]?.finish_reason) resolve()
+      }
+    })
+    apiRes.on('end', resolve)
+    apiRes.on('error', reject)
+  })
+  if (textBuf.trim()) send({ type: 'text', text: textBuf })
+  return Object.values(toolMap).map(tc => {
+    let args = {}; try { args = JSON.parse(tc.args) } catch {}
+    return { id: tc.id, name: tc.name, args }
+  })
+}
+
+async function runAgentLoop(messages, sd, send) {
+  let token = null
+  try { token = await getToken() } catch {}
+
+  const useGroq = !token && GROQ_KEYS.length > 0
+  const conversation = [...messages]
+  // For Groq, conversation stays flat (OpenAI format); for Anthropic, Anthropic format
+  const groqConversation = [...messages]
+
+  for (let turn = 0; turn < 20; turn++) {
+    let toolCalls = []
+    let usedGroq = false
+
+    // Try Anthropic first, fall back to Groq on 429
+    if (token) {
+      const apiRes = await callAnthropic(token, conversation)
+      if (apiRes.statusCode === 429 || apiRes.statusCode === 402) {
+        let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
+        if (GROQ_KEYS.length > 0) {
+          send({ type: 'text', text: '⚠ Claude rate limited, switching to Groq…' })
+          usedGroq = true
+        } else {
+          throw new Error(`Rate limited. No Groq key available as fallback.`)
+        }
+      } else if (apiRes.statusCode !== 200) {
+        let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
+        throw new Error(`API ${apiRes.statusCode}: ${body.slice(0, 150)}`)
+      } else {
+        toolCalls = await streamAnthropicTurn(apiRes, send)
+      }
+    }
+
+    if (!token || usedGroq) {
+      if (!GROQ_KEYS.length) throw new Error('No Claude token and no Groq key.')
+      usedGroq = true
+      for (let attempt = 0; attempt < GROQ_KEYS.length; attempt++) {
+        const apiRes = await callGroq(groqConversation)
+        if (apiRes.statusCode === 429 && attempt < GROQ_KEYS.length - 1) {
+          nextGroqKey()
+          send({ type: 'text', text: `⚠ Groq key ${attempt+1} limited, trying next…` })
+          continue
+        }
+        if (apiRes.statusCode !== 200) {
+          let body = ''; await new Promise(r => { apiRes.on('data', d => body += d); apiRes.on('end', r) })
+          throw new Error(`Groq ${apiRes.statusCode}: ${body.slice(0, 150)}`)
+        }
+        toolCalls = await streamGroqTurn(apiRes, send)
+        break
+      }
+    }
+
+    if (toolCalls.length === 0) return
+
+    // Build assistant message for next turn
+    if (!usedGroq) {
+      conversation.push({
+        role: 'assistant',
+        content: toolCalls.map(tc => ({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args })),
       })
-      apiRes.on('end', resolve)
-      apiRes.on('error', reject)
-    })
-
-    // flush remaining text
-    if (textBuf.trim()) send({ type: 'text', text: textBuf })
-
-    // Build assistant message for conversation
-    const assistantContent = []
-    if (textBuf || toolCalls.length === 0) {
-      // text was streamed, add placeholder
+    } else {
+      groqConversation.push({
+        role: 'assistant',
+        tool_calls: toolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args) } })),
+      })
     }
-    for (const tc of toolCalls) {
-      assistantContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.args })
-    }
-
-    if (toolCalls.length === 0) {
-      // No tool calls — we're done
-      return
-    }
-
-    // Reconstruct assistant message properly
-    conversation.push({
-      role: 'assistant',
-      content: assistantContent,
-    })
 
     // Execute tools
-    const toolResults = []
+    const anthropicResults = []
+    const groqResults = []
     for (const tc of toolCalls) {
       const { id, name, args } = tc
       const preview = Object.entries(args)[0]
@@ -339,10 +465,15 @@ async function runAgentLoop(messages, sd, send) {
         send({ type: 'tool_result', text: result })
       }
 
-      toolResults.push({ type: 'tool_result', tool_use_id: id, content: result })
+      anthropicResults.push({ type: 'tool_result', tool_use_id: id, content: result })
+      groqResults.push({ role: 'tool', tool_call_id: id, content: result })
     }
 
-    conversation.push({ role: 'user', content: toolResults })
+    if (!usedGroq) {
+      conversation.push({ role: 'user', content: anthropicResults })
+    } else {
+      groqConversation.push(...groqResults)
+    }
   }
 
   send({ type: 'text', text: '⚠ Max steps reached.' })
