@@ -56,7 +56,8 @@ function spawnClaude() {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
-    '--permission-mode', 'auto',
+    '--permission-mode', 'acceptEdits',
+    '--allowedTools', 'Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
     env: { ...process.env },
@@ -129,17 +130,18 @@ function onClaudeData(chunk) {
           block.text.split('\n').forEach(l => send({ type: 'text', text: l }))
         }
         if (block.type === 'tool_use') {
-          const preview = JSON.stringify(block.input || {}).slice(0, 40)
+          const first = Object.entries(block.input || {})[0]
+          const preview = first ? `${first[0]}: "${String(first[1]).slice(0, 30)}"` : ''
           send({ type: 'text', text: `→ ${block.name}(${preview})` })
         }
       }
     }
 
-    if (ev.type === 'tool_result' || ev.type === 'tool_use_result') {
-      const content = ev.content || ev.result || ''
-      if (typeof content === 'string') {
-        content.split('\n').forEach(l => send({ type: 'bash_line', text: l }))
-      }
+    // Tool result — actual stdout/stderr from running the tool
+    if (ev.type === 'user' && ev.tool_use_result) {
+      const { stdout, stderr } = ev.tool_use_result
+      if (stdout?.trim()) stdout.split('\n').forEach(l => send({ type: 'bash_line', text: l }))
+      if (stderr?.trim()) stderr.split('\n').forEach(l => send({ type: 'bash_line', text: `stderr: ${l}` }))
     }
 
     if (ev.type === 'result') {
