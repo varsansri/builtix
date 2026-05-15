@@ -10,7 +10,7 @@ import InputBar from './components/InputBar.jsx'
 import ActionBar from './components/ActionBar.jsx'
 
 import { streamChat, detectBridge, isBridgeActive } from './services/api.js'
-import { startVoice, stopVoice, isVoiceSupported } from './services/voice.js'
+import { startRecording, stopRecording, isVoiceSupported } from './services/voice.js'
 import { parseCommand, getHelpText } from './utils/commandParser.js'
 import { TERMINAL_THEME } from './constants/theme.js'
 
@@ -36,9 +36,9 @@ const YELLOW= '\x1b[33m'
 const PURPLE= '\x1b[35m'
 const RESET = '\x1b[0m'
 
-// highlight every occurrence of "builtix" in green (case-insensitive)
+// highlight every occurrence of "builtrix" in green (case-insensitive)
 function highlight(line) {
-  return line.replace(/builtix/gi, m => `${GREEN}${m}${RESET}\x1b[97m`)
+  return line.replace(/builtrix/gi, m => `${GREEN}${m}${RESET}\x1b[97m`)
 }
 
 const WELCOME_LINES = [
@@ -50,11 +50,11 @@ const WELCOME_LINES = [
   `${GREEN} ██████╔╝╚██████╔╝██║███████╗██║   ██║██╔╝ ██╗${RESET}`,
   `${GREEN} ╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═╝   ╚═╝╚═╝  ╚═╝${RESET}`,
   '',
-  `${WHITE}> Welcome to ${GREEN}Builtix${RESET}${WHITE} — build anything from your phone.${RESET}`,
+  `${WHITE}> Welcome to ${GREEN}Builtrix${RESET}${WHITE} — build anything from your phone.${RESET}`,
   `${DIM}> ─────────────────────────────────${RESET}`,
   `${WHITE}> /help   → all commands & shortcuts${RESET}`,
   `${WHITE}> /ls     → list your files${RESET}`,
-  `${WHITE}> 🎙 VOICE → speak your task to ${GREEN}Builtix${RESET}`,
+  `${WHITE}> 🎙 VOICE → speak your task to ${GREEN}Builtrix${RESET}`,
   `${DIM}> ─────────────────────────────────${RESET}`,
   '',
 ]
@@ -123,6 +123,9 @@ export default function App() {
   const timerRef = useRef(null)
   const [isListening, setIsListening] = useState(false)
   const [voicePreview, setVoicePreview] = useState('')
+  const [recTime, setRecTime] = useState(0)
+  const [ttsOn, setTtsOn] = useState(() => localStorage.getItem('bx_tts') === '1')
+  const ttsOnRef = useRef(false)
   const [attachment, setAttachment] = useState(null)
   const [histIdx, setHistIdx] = useState(-1)
   const [copyToast, setCopyToast] = useState(false)
@@ -130,6 +133,26 @@ export default function App() {
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
+  useEffect(() => { ttsOnRef.current = ttsOn }, [ttsOn])
+
+  function ttsSpeak(text) {
+    if (!ttsOnRef.current || !text?.trim()) return
+    const clean = text.replace(/[●↳✓✗⚠→\x1b\[[0-9;]*m]/g, '').trim()
+    if (!clean) return
+    const utt = new SpeechSynthesisUtterance(clean)
+    utt.rate = 1.1
+    utt.volume = 0.9
+    speechSynthesis.speak(utt)
+  }
+
+  function toggleTTS() {
+    setTtsOn(prev => {
+      const next = !prev
+      localStorage.setItem('bx_tts', next ? '1' : '0')
+      if (!next) speechSynthesis.cancel()
+      return next
+    })
+  }
 
   // auto-detect local bridge on load, re-check every 10s
   useEffect(() => {
@@ -454,7 +477,7 @@ export default function App() {
 
     await streamChat({
       messages: newConvo,
-      sessionId: BASE_SESSION,
+      sessionId: tab.id,
       signal: controller.signal,
       onEvent: (event) => {
         switch (event.type) {
@@ -464,6 +487,7 @@ export default function App() {
               write(l)
               assistantText += l + '\n'
               if (l.startsWith('⟹')) decisionLog.current.push(l)
+              ttsSpeak(l)
             })
             if (event.text.startsWith('●') && !taskName) {
               setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
@@ -509,19 +533,26 @@ export default function App() {
 
   function handleMic() {
     if (isListening) {
-      stopVoice()
-      setIsListening(false)
-      if (voicePreview) writeDim('🎙 Voice ready — press ↵ to send')
-      inputRef.current?.focus()
+      stopRecording(() => {
+        setIsListening(false)
+        setRecTime(0)
+        if (voicePreview) writeDim('🎙 Transcribed — press ↵ to send')
+        inputRef.current?.focus()
+      })
       return
     }
-    if (!isVoiceSupported()) { write('✗ Use Chrome on Android for voice.'); return }
-    writeDim('🎙 Listening... tap STOP when done.')
+    if (!isVoiceSupported()) { write('✗ Mic not available in this browser.'); return }
+    setVoicePreview('')
+    setRecTime(0)
     setIsListening(true)
-    startVoice({
-      onResult: ({ final, interim }) => setVoicePreview(final || interim),
-      onError: (err) => { write(`✗ ${err}`); setIsListening(false) },
-      onEnd: (final) => { setIsListening(false); if (final) setVoicePreview(final) },
+    writeDim('🎙 Recording… tap STOP when done (max 10 min)')
+    startRecording({
+      onTranscript: (text) => {
+        setVoicePreview(prev => prev ? prev + ' ' + text : text)
+      },
+      onError: (err) => { write(`✗ ${err}`); setIsListening(false); setRecTime(0) },
+      onTime: (t) => setRecTime(t),
+      onStop: () => { setIsListening(false); setRecTime(0) },
     })
   }
 
@@ -634,9 +665,12 @@ export default function App() {
         onAttach={handleAttach}
         onRun={handleSubmit}
         onStop={handleStop}
+        onTTSToggle={toggleTTS}
         isListening={isListening}
         isRunning={isRunning}
         hasFile={!!attachment}
+        ttsOn={ttsOn}
+        recTime={recTime}
       />
     </div>
   )

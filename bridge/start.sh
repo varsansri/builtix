@@ -1,13 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Builtix Bridge — run this in Termux to power the website for everyone
+# Builtrix Bridge — run this in Termux to power the website for everyone
 
-BRIDGE_TOKEN="${BRIDGE_TOKEN:-builtix-bridge}"
+BRIDGE_TOKEN="${BRIDGE_TOKEN:-builtrix-bridge}"
 REGISTRY="https://builtix.vercel.app/api/bridge-url"
 PORT="${PORT:-3001}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  BUILTIX BRIDGE"
+echo "  BUILTRIX BRIDGE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Check node
@@ -29,14 +29,14 @@ sleep 1
 echo ""
 echo "Starting bridge server..."
 cd "$SCRIPT_DIR"
-node server.js > /tmp/builtix-bridge.log 2>&1 &
+node server.js > /tmp/builtrix-bridge.log 2>&1 &
 BRIDGE_PID=$!
 echo "Bridge PID: $BRIDGE_PID"
 sleep 2
 
 echo "Starting cloudflared tunnel..."
 cloudflared tunnel --url "http://localhost:$PORT" --no-autoupdate \
-  > /tmp/builtix-tunnel.log 2>&1 &
+  > /tmp/builtrix-tunnel.log 2>&1 &
 TUNNEL_PID=$!
 
 echo "Waiting for tunnel URL..."
@@ -44,7 +44,7 @@ PUBLIC_URL=""
 for i in $(seq 1 30); do
   sleep 2
   # cloudflared prints the URL to stderr/stdout in different formats
-  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/builtix-tunnel.log 2>/dev/null | head -1)
+  URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/builtrix-tunnel.log 2>/dev/null | head -1)
   if [ -n "$URL" ]; then
     PUBLIC_URL="$URL"
     break
@@ -52,8 +52,8 @@ for i in $(seq 1 30); do
 done
 
 if [ -z "$PUBLIC_URL" ]; then
-  echo "✗ Could not get tunnel URL. Check /tmp/builtix-tunnel.log"
-  cat /tmp/builtix-tunnel.log | tail -20
+  echo "✗ Could not get tunnel URL. Check /tmp/builtrix-tunnel.log"
+  cat /tmp/builtrix-tunnel.log | tail -20
   exit 1
 fi
 
@@ -70,7 +70,7 @@ RESULT=$(curl -s -X POST "$REGISTRY" \
   -d "{\"url\": \"$PUBLIC_URL\"}")
 
 if echo "$RESULT" | grep -q '"ok":true'; then
-  echo "✓ Registered — everyone who opens Builtix"
+  echo "✓ Registered — everyone who opens Builtrix"
   echo "  will now connect through your phone!"
 else
   echo "⚠ Could not register: $RESULT"
@@ -83,6 +83,6 @@ echo "  Press Ctrl+C to stop."
 echo ""
 
 # Keep alive and show bridge logs
-tail -f /tmp/builtix-bridge.log &
+tail -f /tmp/builtrix-bridge.log &
 
 wait $BRIDGE_PID

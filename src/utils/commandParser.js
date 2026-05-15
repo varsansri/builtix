@@ -22,7 +22,7 @@ export function parseCommand(input) {
 export function getHelpText() {
   return [
     '────────────────────────────────',
-    '  BUILTIX — Commands',
+    '  BUILTRIX — Commands',
     '────────────────────────────────',
     ...Object.entries(COMMANDS).map(([cmd, desc]) =>
       `  ${cmd.padEnd(12)} ${desc}`
@@ -32,11 +32,11 @@ export function getHelpText() {
     '  [+] button  Open a new terminal tab',
     '  Long-press tab  Rename the tab',
     '  [×] button  Close the tab',
-    '  Tabs share the same files —',
-    '  build in tab 1, run in tab 2',
+    '  Each tab is a fresh session —',
+    '  fully isolated from others',
     '────────────────────────────────',
     '  SHORTCUTS',
-    '  Tap ⬛ BUILTIX logo  Reload app',
+    '  Tap ⬛ BUILTRIX logo  Reload app',
     '  Tap ⎘ in header  Copy selected',
     '  Tap 🎙 VOICE  Speak your task',
     '  Tap 📎 FILE  Attach a file',

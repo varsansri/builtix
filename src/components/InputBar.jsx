@@ -17,7 +17,7 @@ const InputBar = forwardRef(function InputBar({ value, onChange, onSubmit, disab
         value={voicePreview || value}
         onChange={e => onChange(e.target.value)}
         onKeyDown={handleKey}
-        placeholder={disabled ? 'Builtix is thinking…' : 'type a command or task…'}
+        placeholder={disabled ? 'Builtrix is thinking…' : 'type a command or task…'}
         disabled={disabled}
         autoCapitalize="none"
         autoCorrect="off"

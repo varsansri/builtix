@@ -1,49 +1,44 @@
-let _bridgeUrl = ''   // set once registry responds
+let _bridgeUrl = ''
 
 export function isBridgeActive() { return !!_bridgeUrl }
 export function getBridgeUrl() { return _bridgeUrl }
 
-// On load: ask Vercel registry for the current bridge URL,
-// then health-check it. Also checks localhost for local dev.
+// Detect bridge on load and every 10s.
+// Priority: localhost → cloudflared tunnel → Vercel fallback
 export async function detectBridge() {
-  // 1. Try localhost (running on the same phone)
+  // 1. Try localhost (developer's own phone)
   try {
     const r = await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(2000) })
-    if (r.ok && (await r.json()).ok) {
-      _bridgeUrl = 'http://localhost:3001'
-      return true
-    }
+    if (r.ok && (await r.json()).ok) { _bridgeUrl = 'http://localhost:3001'; return true }
   } catch {}
 
-  // 2. Ask Vercel registry for the public tunnel URL
+  // 2. Ask Vercel registry for a shared tunnel URL
   try {
     const r = await fetch('/api/bridge-url', { signal: AbortSignal.timeout(4000) })
     if (r.ok) {
       const { url, online } = await r.json()
       if (online && url) {
-        // Health-check the tunnel
         const h = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) })
-        if (h.ok && (await h.json()).ok) {
-          _bridgeUrl = url
-          return true
-        }
+        if (h.ok && (await h.json()).ok) { _bridgeUrl = url; return true }
       }
     }
   } catch {}
 
   _bridgeUrl = ''
-  return false
+  return false  // will fall back to Vercel API
 }
 
+// Stream a chat request.
+// When bridge is live → use it (Claude Code on developer's phone).
+// When bridge is offline → silently fall back to Vercel/Groq (same SSE format).
 export async function streamChat({ messages, sessionId, onEvent, onError, signal }) {
-  if (!_bridgeUrl) {
-    onError('✗ Bridge offline. Run bridge/start.sh in Termux.')
-    return
-  }
+  const url = _bridgeUrl
+    ? `${_bridgeUrl}/api/chat`
+    : '/api/chat'
 
   let response
   try {
-    response = await fetch(`${_bridgeUrl}/api/chat`, {
+    response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, sessionId }),
@@ -51,11 +46,26 @@ export async function streamChat({ messages, sessionId, onEvent, onError, signal
     })
   } catch (err) {
     if (err.name === 'AbortError') { onError('⚠ Stopped.'); return }
-    onError(`✗ Connection error: ${err.message}`)
-    return
+    // Bridge unreachable — retry with Vercel
+    if (_bridgeUrl) {
+      try {
+        response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, sessionId }),
+          signal,
+        })
+      } catch (e2) {
+        onError(`✗ Connection error: ${e2.message}`)
+        return
+      }
+    } else {
+      onError(`✗ Connection error: ${err.message}`)
+      return
+    }
   }
 
-  if (!response.ok) { onError(`✗ Bridge error: ${response.status}`); return }
+  if (!response.ok) { onError(`✗ Server error: ${response.status}`); return }
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

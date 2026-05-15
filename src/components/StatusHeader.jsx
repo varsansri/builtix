@@ -39,7 +39,7 @@ export default function StatusHeader({ project, isRunning, onCopy, bridgeActive 
           </>}
           <BLogo size={22} color="#00ff00" glow={isRunning} />
         </div>
-        <span style={s.wordmark}>BUILTIX</span>
+        <span style={s.wordmark}>BUILTRIX</span>
         {bridgeActive
           ? <span style={s.localBadge}>LIVE</span>
           : <span style={s.offlineBadge}>OFFLINE</span>

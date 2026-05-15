@@ -1,14 +1,20 @@
 import React from 'react'
 
-export default function ActionBar({ onMic, onAttach, onRun, onStop, isListening, isRunning, hasFile }) {
+function fmtTime(secs) {
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+export default function ActionBar({ onMic, onAttach, onRun, onStop, onTTSToggle, isListening, isRunning, hasFile, ttsOn, recTime }) {
   return (
     <div style={s.bar}>
 
-      {/* Voice */}
+      {/* Mic */}
       <button
         style={{ ...s.iconBtn, ...(isListening ? s.iconBtnRed : {}) }}
         onPointerDown={e => { e.preventDefault(); onMic() }}
-        title={isListening ? 'Stop listening' : 'Voice input'}
+        title={isListening ? 'Stop recording' : 'Record voice (up to 10 min)'}
       >
         {isListening
           ? <svg viewBox="0 0 20 20" width="18" height="18" fill="#ff4444"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>
@@ -16,6 +22,31 @@ export default function ActionBar({ onMic, onAttach, onRun, onStop, isListening,
               <rect x="7" y="2" width="6" height="9" rx="3"/>
               <path d="M4 10a6 6 0 0 0 12 0"/>
               <line x1="10" y1="17" x2="10" y2="19"/>
+            </svg>
+        }
+      </button>
+
+      {/* Recording timer */}
+      {isListening && recTime > 0 && (
+        <span style={s.recTimer}>{fmtTime(recTime)}</span>
+      )}
+
+      {/* TTS speaker toggle */}
+      <button
+        style={{ ...s.iconBtn, ...(ttsOn ? s.iconBtnGreen : {}) }}
+        onPointerDown={e => { e.preventDefault(); onTTSToggle() }}
+        title={ttsOn ? 'Speaker on — tap to mute' : 'Speaker off — tap to enable'}
+      >
+        {ttsOn
+          ? <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="#00ff00" strokeWidth="1.6" strokeLinecap="round">
+              <polygon points="3,7 3,13 7,13 12,17 12,3 7,7"/>
+              <path d="M15 7a4 4 0 0 1 0 6"/>
+              <path d="M17.5 4.5a8 8 0 0 1 0 11"/>
+            </svg>
+          : <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.6" strokeLinecap="round">
+              <polygon points="3,7 3,13 7,13 12,17 12,3 7,7"/>
+              <line x1="15" y1="8" x2="19" y2="12"/>
+              <line x1="19" y1="8" x2="15" y2="12"/>
             </svg>
         }
       </button>
@@ -36,7 +67,7 @@ export default function ActionBar({ onMic, onAttach, onRun, onStop, isListening,
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Run / Stop — primary action, big green rounded-square */}
+      {/* Run / Stop */}
       {isRunning
         ? <button style={{ ...s.primaryBtn, ...s.primaryBtnStop }}
             onPointerDown={e => { e.preventDefault(); onStop() }}
@@ -64,7 +95,7 @@ const s = {
     display: 'flex',
     alignItems: 'center',
     padding: '0 12px',
-    gap: 10,
+    gap: 8,
     flexShrink: 0,
   },
   iconBtn: {
@@ -85,9 +116,21 @@ const s = {
     background: '#1a0505',
     border: '1px solid #661111',
   },
+  iconBtnGreen: {
+    background: '#041404',
+    border: '1px solid #00ff0044',
+  },
   iconBtnGreenDim: {
     background: '#041004',
     border: '1px solid #1a4a1a',
+  },
+  recTimer: {
+    color: '#ff4444',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 1,
+    minWidth: 36,
   },
   primaryBtn: {
     height: 44,

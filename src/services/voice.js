@@ -1,54 +1,104 @@
-// Uses Web Speech API — free, built into every browser, no API key needed
+// MediaRecorder-based recording — up to 10 min, transcribed via Groq Whisper
+// Records in 3-min segments to stay within server body limits
 
-let recognition = null
+let stream = null
+let mediaRecorder = null
+let chunks = []
+let segmentTimer = null
+let totalTimer = null
+let tickTimer = null
+let isActive = false
+
+const SEGMENT_MS = 3 * 60 * 1000
+const MAX_MS = 10 * 60 * 1000
 
 export function isVoiceSupported() {
-  return 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window
+  return !!(navigator.mediaDevices?.getUserMedia)
 }
 
-export function startVoice({ onResult, onError, onStart, onEnd }) {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-  if (!SR) {
-    onError('Voice not supported in this browser. Try Chrome.')
-    return null
+export async function startRecording({ onTranscript, onError, onTime, onStop }) {
+  if (isActive) return
+  isActive = true
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, sampleRate: 16000 },
+    })
+  } catch (err) {
+    isActive = false
+    onError(`Mic blocked: ${err.message}`)
+    return
   }
 
-  recognition = new SR()
-  recognition.continuous = true
-  recognition.interimResults = true
-  recognition.lang = 'en-US'
-  recognition.maxAlternatives = 1
+  let elapsed = 0
+  tickTimer = setInterval(() => { elapsed++; onTime?.(elapsed) }, 1000)
+  totalTimer = setTimeout(() => stopRecording(onStop), MAX_MS)
 
-  let finalTranscript = ''
+  runSegment(onTranscript, onError, onStop)
+}
 
-  recognition.onstart = () => onStart?.()
+function runSegment(onTranscript, onError, onStop) {
+  if (!isActive || !stream) return
+  chunks = []
 
-  recognition.onresult = (e) => {
-    let interim = ''
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript
-      if (e.results[i].isFinal) finalTranscript += t + ' '
-      else interim = t
+  const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg']
+    .find(t => MediaRecorder.isTypeSupported(t)) || ''
+
+  let mr
+  try {
+    mr = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: 16000 })
+  } catch {
+    mr = new MediaRecorder(stream)
+  }
+  mediaRecorder = mr
+
+  mr.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data) }
+  mr.onstop = async () => {
+    if (chunks.length) {
+      const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' })
+      await transcribeBlob(blob, onTranscript, onError)
     }
-    onResult({ final: finalTranscript.trim(), interim: interim.trim() })
+    if (isActive) runSegment(onTranscript, onError, onStop)
   }
 
-  recognition.onerror = (e) => {
-    onError(`Voice error: ${e.error}`)
-  }
-
-  recognition.onend = () => {
-    onEnd?.(finalTranscript.trim())
-    finalTranscript = ''
-  }
-
-  recognition.start()
-  return recognition
+  mr.start(500)
+  segmentTimer = setTimeout(() => {
+    if (mr.state === 'recording') mr.stop()
+  }, SEGMENT_MS)
 }
 
-export function stopVoice() {
-  if (recognition) {
-    recognition.stop()
-    recognition = null
+export function stopRecording(onStop) {
+  isActive = false
+  clearInterval(tickTimer)
+  clearTimeout(totalTimer)
+  clearTimeout(segmentTimer)
+  if (mediaRecorder?.state === 'recording') mediaRecorder.stop()
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null }
+  onStop?.()
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+  }
+  return btoa(binary)
+}
+
+async function transcribeBlob(blob, onTranscript, onError) {
+  try {
+    const base64 = arrayBufferToBase64(await blob.arrayBuffer())
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio: base64, mimeType: blob.type || 'audio/webm' }),
+    })
+    if (!res.ok) { onError?.(`Transcribe failed (${res.status})`); return }
+    const { transcript, error } = await res.json()
+    if (error) { onError?.(error); return }
+    if (transcript?.trim()) onTranscript?.(transcript.trim())
+  } catch (err) {
+    onError?.(`Transcribe error: ${err.message}`)
   }
 }

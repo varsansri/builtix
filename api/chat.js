@@ -35,7 +35,7 @@ function isRateLimit(err) {
 
 // ── Session filesystem ──────────────────────────────────────────────
 
-const SESSION_BASE = '/tmp/builtix-sessions'
+const SESSION_BASE = '/tmp/builtrix-sessions'
 
 async function sessionDir(sessionId) {
   const dir = path.join(SESSION_BASE, sessionId.replace(/[^a-z0-9_-]/gi, '_'))
@@ -241,7 +241,7 @@ const TOOL_DEFS = [
   { type:'function', function:{ name:'execute_code', description:'Compile and run code in any language via Piston cloud executor. Use for Python, C++, Java, Go, Rust, Ruby, PHP, Swift, Kotlin, TypeScript. Returns real compiler output + stdout + stderr. For interactive programs pass sample stdin values. AI picks the best language for the task.', parameters:{ type:'object', properties:{ language:{type:'string', description:'python, cpp, c, java, go, rust, ruby, php, swift, kotlin, typescript, javascript, bash'}, code:{type:'string', description:'Complete source code'}, stdin:{type:'string', description:'Sample input for interactive programs, newline-separated'} }, required:['language','code'] } } },
 ]
 
-const SYSTEM = `You are Builtix — a mobile AI terminal that EXECUTES real tasks like Claude Code.
+const SYSTEM = `You are Builtrix — a powerful AI terminal that EXECUTES real tasks.
 
 INTENT DETECTION (decide this silently for every message):
 - QUESTION: what/why/how/explain/compare → answer in plain text, NO tools
@@ -304,10 +304,11 @@ STRICT RULES — never break:
 // ── Handler ─────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' })
-    return
-  }
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  if (req.method === 'OPTIONS') { res.status(204).end(); return }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
 
   const { messages, sessionId = 'default' } = req.body
   const sd = await sessionDir(sessionId)
