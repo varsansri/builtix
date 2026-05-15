@@ -1,24 +1,25 @@
 import React, { useState } from 'react'
 
 const KEYS = [
-  { label: 'ESC',  type: 'esc' },
-  { label: 'CTRL', type: 'modifier', mod: 'CTRL' },
-  { label: 'ALT',  type: 'modifier', mod: 'ALT' },
-  { label: 'TAB',  type: 'insert', value: '\t' },
-  { label: '↑',    type: 'history', dir: 'UP' },
-  { label: '↓',    type: 'history', dir: 'DOWN' },
-  { label: '←',    type: 'cursor', dir: 'LEFT' },
-  { label: '→',    type: 'cursor', dir: 'RIGHT' },
-  { label: '/',    type: 'insert', value: '/' },
-  { label: '|',    type: 'insert', value: '|' },
-  { label: '-',    type: 'insert', value: '-' },
-  { label: '_',    type: 'insert', value: '_' },
-  { label: "'",    type: 'insert', value: "'" },
-  { label: '"',    type: 'insert', value: '"' },
-  { label: '~',    type: 'insert', value: '~' },
+  { label: 'ESC',    type: 'esc' },
+  { label: 'CTRL',   type: 'modifier', mod: 'CTRL' },
+  { label: 'ALT',    type: 'modifier', mod: 'ALT' },
+  { label: 'TAB',    type: 'insert', value: '\t' },
+  { label: 'SELECT', type: 'select' },
+  { label: '↑',      type: 'history', dir: 'UP' },
+  { label: '↓',      type: 'history', dir: 'DOWN' },
+  { label: '←',      type: 'cursor', dir: 'LEFT' },
+  { label: '→',      type: 'cursor', dir: 'RIGHT' },
+  { label: '/',      type: 'insert', value: '/' },
+  { label: '|',      type: 'insert', value: '|' },
+  { label: '-',      type: 'insert', value: '-' },
+  { label: '_',      type: 'insert', value: '_' },
+  { label: "'",      type: 'insert', value: "'" },
+  { label: '"',      type: 'insert', value: '"' },
+  { label: '~',      type: 'insert', value: '~' },
 ]
 
-export default function ExtraKeysBar({ onKey }) {
+export default function ExtraKeysBar({ onKey, selectMode }) {
   const [activeMod, setActiveMod] = useState(null)
 
   function handleKey(k) {
@@ -37,7 +38,8 @@ export default function ExtraKeysBar({ onKey }) {
   return (
     <div style={s.bar}>
       {KEYS.map(k => {
-        const active = k.type === 'modifier' && activeMod === k.mod
+        const active = (k.type === 'modifier' && activeMod === k.mod)
+          || (k.type === 'select' && selectMode)
         return (
           <button
             key={k.label}

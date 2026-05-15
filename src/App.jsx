@@ -129,6 +129,7 @@ export default function App() {
   const [attachment, setAttachment] = useState(null)
   const [histIdx, setHistIdx] = useState(-1)
   const [copyToast, setCopyToast] = useState('')
+  const [selectMode, setSelectMode] = useState(false)
 
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
@@ -605,7 +606,8 @@ export default function App() {
       }
       return
     }
-    if (k.type === 'esc') { setInput(''); setVoicePreview(''); return }
+    if (k.type === 'select') { setSelectMode(prev => !prev); return }
+    if (k.type === 'esc') { setSelectMode(false); setInput(''); setVoicePreview(''); return }
     if (k.type === 'history') {
       const tab = getActiveTab()
       const hist = tab?.cmdHistory || []
@@ -653,8 +655,17 @@ export default function App() {
           </button>
         </div>
       )}
-      <div ref={termRef} style={styles.terminal} onClick={() => inputRef.current?.focus()} />
-      <ExtraKeysBar onKey={handleExtraKey} />
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        <div ref={termRef} style={{ ...styles.terminal, visibility: selectMode ? 'hidden' : 'visible' }} onClick={() => inputRef.current?.focus()} />
+        {selectMode && (
+          <div style={styles.selectOverlay}>
+            <pre style={styles.selectText}>
+              {getActiveTab()?.lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, '')).join('\n')}
+            </pre>
+          </div>
+        )}
+      </div>
+      <ExtraKeysBar onKey={handleExtraKey} selectMode={selectMode} />
       <InputBar
         ref={inputRef}
         value={input}
@@ -681,7 +692,25 @@ export default function App() {
 
 const styles = {
   root: { display: 'flex', flexDirection: 'column', height: '100dvh', width: '100%', background: 'var(--bg)', overflow: 'hidden', position: 'relative' },
-  terminal: { flex: 1, overflow: 'hidden', minHeight: 0 },
+  terminal: { width: '100%', height: '100%' },
+  selectOverlay: {
+    position: 'absolute', inset: 0,
+    background: 'var(--bg)',
+    overflowY: 'auto',
+    padding: '10px 12px',
+    WebkitOverflowScrolling: 'touch',
+  },
+  selectText: {
+    margin: 0,
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+    fontSize: 13,
+    lineHeight: 1.4,
+    color: '#ccc',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    userSelect: 'text',
+    WebkitUserSelect: 'text',
+  },
   toast: {
     position: 'absolute', top: 88, left: '50%', transform: 'translateX(-50%)',
     background: '#00ff00', color: '#000', fontFamily: "'Inter', sans-serif",
