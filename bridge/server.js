@@ -6,50 +6,77 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3001
+const SESSION_BASE = path.join(process.env.HOME || '/root', '.builtix-sessions')
+
+// ── Session dir ──────────────────────────────────────────────────────
+
+async function sessionDir(id) {
+  const d = path.join(SESSION_BASE, id.replace(/[^a-z0-9_-]/gi, '_'))
+  await fs.mkdir(d, { recursive: true })
+  return d
+}
+
+// ── Live bash streaming (runs alongside Claude Code's internal runner) ─
+// Claude Code buffers bash output. We spawn the same command ourselves
+// to stream it live to the browser. Double-run is acceptable for most tasks.
+
+function streamBashLive(command, cwd, send) {
+  const env = { ...process.env, PYTHONUNBUFFERED: '1', PWD: cwd }
+  const child = spawn('bash', ['-c', command], { cwd, env })
+  let buf = ''
+
+  function flush(data) {
+    buf += data.toString()
+    const parts = buf.split('\n'); buf = parts.pop()
+    for (const line of parts) send({ type: 'bash_line', text: line })
+  }
+
+  child.stdout.on('data', flush)
+  child.stderr.on('data', flush)
+  child.on('close', () => { if (buf.trim()) send({ type: 'bash_line', text: buf }) })
+  child.on('error', err => send({ type: 'bash_line', text: `✗ ${err.message}` }))
+}
 
 // ── Persistent Claude Code process ───────────────────────────────────
-// One process stays alive. Each request writes a message to its stdin.
-// Claude Code streams back events. No API calls from the bridge itself.
 
-const SYSTEM_APPEND = `You are Builtix — a mobile AI terminal running in Termux.
+const SYSTEM_APPEND = `
+You are Builtix — an AI terminal running on an Android phone (Termux, Ubuntu proot).
 
-INTENT DETECTION (decide silently):
-- QUESTION → answer in plain text, no tools
-- TASK → execute immediately using tools
+ENVIRONMENT:
+- Real Termux Ubuntu: python3, node, gcc, git, apt-get, pip, npm, curl all work
+- You are on the user's phone — no cloud, full shell access
+- Session working directory is where your files are saved
 
-IF TASK → start with:
-● [what you are doing]
+IMPORTANT — LIVE OUTPUT:
+When you run Bash commands, the output streams LIVE to the user's screen.
+For timed/delayed programs: use shell syntax directly in Bash:
+  for i in $(seq 1 10); do echo $i; sleep 2; done
+Do NOT write a Python script just to print with delays.
+Use PYTHONUNBUFFERED=1 before any python command.
+
+FORMAT:
+● [task description]
   ↳ [step]
   ↳ [step]
 
-Use Bash for ALL code execution. Real Termux: python3, node, gcc, git, apt.
-write_file first, then Bash to run it. Fix errors automatically.
-
-After task done:
+After done:
 ────────────────────────────────
 ✓ Done — [summary]
 ────────────────────────────────
-Built: [what was created]
-How to use: [instructions]
-────────────────────────────────
 
-RULES:
-- NEVER say "I would" or "you could" — just DO IT
-- No markdown (no ** ## backticks)
-- Lines under 50 chars for mobile
-- Symbols: ● step  ↳ substep  ✓ done  ✗ error`
+No markdown. Lines under 50 chars. Symbols: ● ↳ ✓ ✗ ⚠ →`
 
 let claudeProc = null
 let procReady = false
-let initDone = false
-const requestQueue = []
-let activeRequest = null
-let outputBuf = ''
+const queue = []
+let active = null
+let outBuf = ''
+let seenToolIds = new Set()   // track tools we've already live-streamed
 
 function spawnClaude() {
   procReady = false
-  initDone = false
-  outputBuf = ''
+  outBuf = ''
+  seenToolIds = new Set()
 
   claudeProc = spawn('claude', [
     '-p',
@@ -57,139 +84,141 @@ function spawnClaude() {
     '--output-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'acceptEdits',
-    '--allowedTools', 'Bash,Edit,Read,Write,Glob,Grep,WebSearch,WebFetch',
+    '--allowedTools', 'Bash,Write,Read,Edit,Glob,Grep',
     '--add-dir', '/root/builtix',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
+    cwd: __dirname,
     env: { ...process.env },
-    cwd: __dirname,   // bridge dir — claude auto-reads CLAUDE.md here
     stdio: ['pipe', 'pipe', 'pipe'],
   })
 
-  claudeProc.stdout.on('data', onClaudeData)
-
+  claudeProc.stdout.on('data', onData)
   claudeProc.stderr.on('data', d => {
-    const text = d.toString().trim()
-    if (text) console.error('[claude stderr]', text)
+    const t = d.toString().trim()
+    if (t && !t.includes('Warning') && !t.includes('stdin')) console.error('[cc]', t)
   })
-
-  claudeProc.on('exit', (code) => {
+  claudeProc.on('exit', code => {
     console.log(`[bridge] claude exited (${code}), restarting…`)
     procReady = false
-    initDone = false
     setTimeout(spawnClaude, 1000)
   })
-
   claudeProc.on('error', err => {
     console.error('[bridge] spawn error:', err.message)
     setTimeout(spawnClaude, 2000)
   })
 
-  // Send warmup ping — triggers system init event and loads context
-  const warmup = JSON.stringify({
-    type: 'user',
-    message: { role: 'user', content: [{ type: 'text', text: '.' }] },
-  })
-  claudeProc.stdin.write(warmup + '\n')
-  console.log('[bridge] claude started, warming up…')
+  writeMsg({ type:'user', message:{ role:'user', content:[{ type:'text', text:'.' }] } })
+  console.log('[bridge] claude starting…')
 }
 
-function onClaudeData(chunk) {
-  outputBuf += chunk.toString()
-  const lines = outputBuf.split('\n')
-  outputBuf = lines.pop()
+function writeMsg(obj) {
+  claudeProc.stdin.write(JSON.stringify(obj) + '\n')
+}
+
+function onData(chunk) {
+  outBuf += chunk.toString()
+  const lines = outBuf.split('\n')
+  outBuf = lines.pop()
 
   for (const line of lines) {
     if (!line.trim()) continue
-    let ev
-    try { ev = JSON.parse(line) } catch { continue }
+    let ev; try { ev = JSON.parse(line) } catch { continue }
 
-    // First system init event
-    if (!initDone && ev.type === 'system' && ev.subtype === 'init') {
-      initDone = true
-      console.log('[bridge] session:', ev.session_id)
-      continue
+    // Init event
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      console.log('[bridge] session:', ev.session_id); continue
     }
 
-    // Warmup result → now ready
+    // Warmup done → ready
     if (!procReady && ev.type === 'result') {
-      procReady = true
-      console.log('[bridge] ready ✓')
-      drain()
-      continue
+      procReady = true; console.log('[bridge] ready ✓'); drain(); continue
     }
 
-    // Skip rate_limit_event noise
+    if (!active) continue
+    const { send, sd } = active
+
     if (ev.type === 'rate_limit_event') continue
 
-    // Route to active request
-    if (!activeRequest) continue
-    const { send, resolve } = activeRequest
-
+    // Assistant message — text and tool_use blocks
     if (ev.type === 'assistant' && ev.message?.content) {
       for (const block of ev.message.content) {
+        // Stream text live
         if (block.type === 'text' && block.text) {
           block.text.split('\n').forEach(l => send({ type: 'text', text: l }))
         }
-        if (block.type === 'tool_use') {
-          const first = Object.entries(block.input || {})[0]
-          const preview = first ? `${first[0]}: "${String(first[1]).slice(0, 30)}"` : ''
+        // Tool call — show label + start live streaming bash in parallel
+        if (block.type === 'tool_use' && !seenToolIds.has(block.id)) {
+          seenToolIds.add(block.id)
+          const inp = block.input || {}
+          const first = Object.entries(inp)[0]
+          const preview = first ? `${first[0]}: "${String(first[1]).slice(0,35)}"` : ''
           send({ type: 'text', text: `→ ${block.name}(${preview})` })
+
+          // For Bash: spawn live stream immediately
+          // Claude Code also runs it (for AI context) — parallel is fine
+          if (block.name === 'Bash' && inp.command) {
+            streamBashLive(inp.command, sd, send)
+          }
         }
       }
     }
 
-    // Tool result — actual stdout/stderr from running the tool
+    // Tool result from Claude Code's internal execution
+    // Output already shown via our live stream — suppress duplicate display
     if (ev.type === 'user' && ev.tool_use_result) {
-      const { stdout, stderr } = ev.tool_use_result
-      if (stdout?.trim()) stdout.split('\n').forEach(l => send({ type: 'bash_line', text: l }))
-      if (stderr?.trim()) stderr.split('\n').forEach(l => send({ type: 'bash_line', text: `stderr: ${l}` }))
+      // Don't re-display stdout, it already streamed live
+      // stderr only if we missed it
+      const { stderr } = ev.tool_use_result
+      if (stderr?.trim()) {
+        stderr.split('\n').forEach(l => send({ type: 'bash_line', text: `err: ${l}` }))
+      }
     }
 
+    // Write/Read/Edit tool results — show these (no live stream for file ops)
+    if (ev.type === 'user' && ev.message?.content) {
+      for (const block of ev.message.content) {
+        if (block.type === 'tool_result' && block.content) {
+          const name = active.lastToolName
+          // Only show file op results, not bash (already live-streamed)
+          if (name && name !== 'Bash') {
+            send({ type: 'tool_result', text: String(block.content).slice(0, 200) })
+          }
+        }
+      }
+    }
+
+    // Final result — done
     if (ev.type === 'result') {
       send({ type: 'done' })
-      resolve()
-      activeRequest = null
+      active.resolve()
+      active = null
       drain()
     }
   }
 }
 
 function drain() {
-  if (activeRequest || !requestQueue.length || !procReady) return
-  const next = requestQueue.shift()
-  activeRequest = next
-  writeMessage(next.messages)
-}
-
-function writeMessage(messages) {
-  // Send full conversation as a single user turn (last user message)
-  // Claude Code maintains its own session context
-  const last = messages.filter(m => m.role === 'user').pop()
-  const text = last?.content || ''
-
-  const msg = JSON.stringify({
+  if (active || !queue.length || !procReady) return
+  active = queue.shift()
+  const last = active.messages.filter(m => m.role === 'user').pop()
+  writeMsg({
     type: 'user',
-    message: {
-      role: 'user',
-      content: [{ type: 'text', text }],
-    },
+    message: { role: 'user', content: [{ type: 'text', text: last?.content || '' }] },
   })
-
-  claudeProc.stdin.write(msg + '\n')
 }
 
-// ── HTTP server ───────────────────────────────────────────────────────
+// ── HTTP server ──────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, mode: 'claude-code-pipe', version: '3.0', ready: procReady }))
+    res.end(JSON.stringify({ ok: true, mode: 'live-bash-shadow', version: '4.1', ready: procReady }))
     return
   }
 
@@ -197,40 +226,29 @@ const server = http.createServer(async (req, res) => {
     let body = ''
     req.on('data', c => body += c)
     await new Promise(r => req.on('end', r))
+    let parsed; try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
 
-    let parsed
-    try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
-
-    const { messages = [] } = parsed
+    const { messages = [], sessionId = 'default' } = parsed
+    const sd = await sessionDir(sessionId)
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     })
-
-    const send = (data) => {
-      if (!res.destroyed) res.write(`data: ${JSON.stringify(data)}\n\n`)
-    }
+    const send = d => { if (!res.destroyed) res.write(`data: ${JSON.stringify(d)}\n\n`) }
 
     if (!procReady) {
-      send({ type: 'text', text: '⚠ Claude Code starting up, please wait…' })
-      // Wait up to 30s for process to be ready
+      send({ type: 'text', text: '⚠ Claude starting, please wait…' })
       await new Promise((resolve, reject) => {
-        const interval = setInterval(() => {
-          if (procReady) { clearInterval(interval); resolve() }
-        }, 500)
-        setTimeout(() => { clearInterval(interval); reject(new Error('timeout')) }, 30000)
-      }).catch(() => {
-        send({ type: 'text', text: '✗ Claude Code failed to start' })
-        send({ type: 'done' })
-        res.end()
-      })
+        const t = setInterval(() => { if (procReady) { clearInterval(t); resolve() } }, 500)
+        setTimeout(() => { clearInterval(t); reject() }, 30000)
+      }).catch(() => { send({ type: 'text', text: '✗ Claude failed to start' }); send({ type:'done' }); res.end() })
       if (!procReady) return
     }
 
     await new Promise(resolve => {
-      requestQueue.push({ messages, send, resolve })
+      queue.push({ messages, sd, send, resolve })
       drain()
     })
 
@@ -242,6 +260,6 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`✓ Builtix bridge v3 (persistent pipe) on http://localhost:${PORT}`)
+  console.log(`✓ Builtix live-bash bridge v4.1 on http://localhost:${PORT}`)
   spawnClaude()
 })
