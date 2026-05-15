@@ -128,7 +128,7 @@ export default function App() {
   const ttsOnRef = useRef(false)
   const [attachment, setAttachment] = useState(null)
   const [histIdx, setHistIdx] = useState(-1)
-  const [copyToast, setCopyToast] = useState(false)
+  const [copyToast, setCopyToast] = useState('')
 
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
@@ -203,8 +203,8 @@ export default function App() {
       const sel = term.getSelection()
       if (sel) {
         navigator.clipboard?.writeText(sel).then(() => {
-          setCopyToast(true)
-          setTimeout(() => setCopyToast(false), 1500)
+          setCopyToast('✓ Copied selection')
+          setTimeout(() => setCopyToast(''), 1500)
         }).catch(() => {})
       }
     })
@@ -571,14 +571,17 @@ export default function App() {
   }
 
   function handleCopy() {
+    // Try xterm selection first, fall back to copying all tab lines
     const sel = xtermRef.current?.getSelection()
-    if (sel) {
-      navigator.clipboard?.writeText(sel)
-      setCopyToast(true)
-      setTimeout(() => setCopyToast(false), 1500)
-    } else {
-      write('⚠ Select text first, then tap ⎘')
-    }
+    const text = sel || getActiveTab()?.lines
+      .map(l => l.replace(/\x1b\[[0-9;]*m/g, ''))  // strip ANSI codes
+      .join('\n')
+      .trim()
+    if (!text) return
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopyToast(sel ? '✓ Copied selection' : '✓ Copied all output')
+      setTimeout(() => setCopyToast(false), 1800)
+    }).catch(() => {})
   }
 
   const handleExtraKey = useCallback((k) => {
@@ -637,7 +640,7 @@ export default function App() {
         onClose={closeTab}
         onRename={renameTab}
       />
-      {copyToast && <div style={styles.toast}>✓ Copied</div>}
+      {copyToast && <div style={styles.toast}>{copyToast}</div>}
       {isRunning && (
         <div style={styles.taskPill}>
           <span style={styles.taskDot}>●</span>
