@@ -114,6 +114,7 @@ export default function App() {
   const activeTabIdRef = useRef(firstTab.id)
 
   const [input, setInput] = useState('')
+  const [uiOverlay, setUiOverlay] = useState(null)
   const [bridgeActive, setBridgeActive] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [snakeActive, setSnakeActive] = useState(false)
@@ -347,6 +348,7 @@ export default function App() {
     activeTabIdRef.current = tabId
     setInput('')
     setHistIdx(-1)
+    setUiOverlay(null)
     replayTab(tabId)
   }
 
@@ -426,6 +428,7 @@ export default function App() {
           updateActiveConversation([])
           xtermRef.current?.clear()
           setTabs(prev => prev.map(t => t.id === activeTabIdRef.current ? { ...t, lines: [], name } : t))
+          setUiOverlay(null)
           write(`✓ New project: ${name}`)
           return
         case '/history':
@@ -493,6 +496,10 @@ export default function App() {
             if (event.text.startsWith('●') && !taskName) {
               setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
             }
+            break
+          case 'ui_inject':
+            setUiOverlay(event.html)
+            write('↳ UI loaded — interactive overlay is live')
             break
           case 'tool_call':
             termWrite(`\x1b[36m${event.text}\x1b[0m`)
@@ -657,6 +664,17 @@ export default function App() {
       )}
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div ref={termRef} style={{ ...styles.terminal, visibility: selectMode ? 'hidden' : 'visible' }} onClick={() => inputRef.current?.focus()} />
+        {uiOverlay && (
+          <div style={styles.uiOverlay}>
+            <button style={styles.uiClose} onPointerDown={() => setUiOverlay(null)}>✕ close</button>
+            <iframe
+              srcDoc={uiOverlay}
+              style={styles.uiFrame}
+              sandbox="allow-scripts"
+              title="builtix-ui"
+            />
+          </div>
+        )}
         {selectMode && (
           <div style={styles.selectOverlay}>
             <pre style={styles.selectText}>
@@ -710,6 +728,28 @@ const styles = {
     wordBreak: 'break-word',
     userSelect: 'text',
     WebkitUserSelect: 'text',
+  },
+  uiOverlay: {
+    position: 'absolute', inset: 0,
+    background: '#0a0a0a',
+    display: 'flex', flexDirection: 'column',
+    zIndex: 200,
+  },
+  uiClose: {
+    background: 'transparent',
+    border: '1px solid rgba(0,255,0,0.3)',
+    color: '#00ff00',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 11, fontWeight: 700,
+    padding: '4px 14px',
+    cursor: 'pointer',
+    alignSelf: 'flex-end',
+    margin: '6px 8px 2px',
+    borderRadius: 10,
+    letterSpacing: 0.5,
+  },
+  uiFrame: {
+    flex: 1, border: 'none', background: '#0a0a0a',
   },
   toast: {
     position: 'absolute', top: 88, left: '50%', transform: 'translateX(-50%)',
