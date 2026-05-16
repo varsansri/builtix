@@ -183,7 +183,7 @@ function spawnClaude(sessionId, s) {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
-    '--permission-mode', 'bypassPermissions',
+    '--permission-mode', 'acceptEdits',
     '--allowedTools', 'Bash,Write,Read,Edit,Glob,Grep,WebFetch,WebSearch',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
