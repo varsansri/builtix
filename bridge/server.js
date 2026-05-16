@@ -66,6 +66,19 @@ INPUT/OUTPUT — HOW IT WORKS:
 - You CANNOT make interactive terminal apps (ncurses, curses, input() loops)
 - Do NOT use: curses, blessed, termios, raw input, interactive CLI tools
 
+CHOICES & OPTIONS — CRITICAL RULE:
+Whenever you need the user to make a decision or pick an option, ALWAYS use
+this numbered text format — never arrow keys, never TUI menus:
+
+  Choose:
+  1. Option one
+  2. Option two
+  3. Option three
+
+Then WAIT for the user to reply with a number (1, 2, 3…).
+This applies to: confirmations, installs, file overwrites, choices, everything.
+NEVER ask "press y/n" — use numbered options only.
+
 BUILT-IN BROWSER FEATURES (already exist, tell users about these):
 - /dragon → built-in snake game with real arrow key control (plays LIVE in this chat!)
 - /clear  → clear screen
@@ -164,15 +177,13 @@ function spawnClaude(sessionId, s) {
   s.outBuf = ''
   s.seenToolIds = new Set()
   s.uiBuffer = null  // collects UI_INJECT HTML between markers
-  s.stderrBuf = ''
-  s.waitingForPermission = false
 
   s.proc = spawn('claude', [
     '-p',
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
-    '--permission-mode', 'acceptEdits',
+    '--permission-mode', 'bypassPermissions',
     '--allowedTools', 'Bash,Write,Read,Edit,Glob,Grep,WebFetch,WebSearch',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
@@ -184,41 +195,8 @@ function spawnClaude(sessionId, s) {
   const tag = sessionId.slice(0, 12)
   s.proc.stdout.on('data', chunk => onData(sessionId, s, chunk))
   s.proc.stderr.on('data', d => {
-    const raw = d.toString()
-    const t = stripAnsi(raw).trim()
+    const t = stripAnsi(d.toString()).trim()
     if (t && !t.includes('Warning') && !t.includes('stdin')) console.error(`[cc:${tag}]`, t)
-
-    // Accumulate stderr to detect permission prompts
-    s.stderrBuf += stripAnsi(raw)
-    // Trim buffer to avoid unbounded growth
-    if (s.stderrBuf.length > 4000) s.stderrBuf = s.stderrBuf.slice(-2000)
-
-    if (!s.waitingForPermission && s.active) {
-      const buf = s.stderrBuf
-      // Claude Code permission prompt indicators
-      const isPermPrompt = (
-        buf.includes('Yes, allow') ||
-        buf.includes('No, don') ||
-        (buf.includes('Allow') && buf.includes('?')) ||
-        buf.includes('Do you want to allow')
-      )
-      if (isPermPrompt) {
-        s.waitingForPermission = true
-        s.stderrBuf = ''
-        // Extract command context from buffer if present
-        const cmdMatch = buf.match(/Command:\s*(.+)/i) || buf.match(/run[:\s]+(.+)/i)
-        const cmdHint = cmdMatch ? cmdMatch[1].trim().slice(0, 80) : ''
-        s.active.send({
-          type: 'permission_request',
-          hint: cmdHint,
-          options: [
-            { label: 'Yes, allow once', value: 'y' },
-            { label: 'Always allow this session', value: 'a' },
-            { label: 'No, deny', value: 'n' },
-          ]
-        })
-      }
-    }
   })
   s.proc.on('exit', code => {
     console.log(`[bridge] ${tag} exited (${code})`)
@@ -424,27 +402,6 @@ const server = http.createServer(async (req, res) => {
     })
 
     if (!res.destroyed) res.end()
-    return
-  }
-
-  // ── Permission response — /api/permission/:sessionId ─────────────────
-  const permMatch = req.url?.match(/^\/api\/permission\/(.+)$/)
-  if (req.method === 'POST' && permMatch) {
-    const sessionId = decodeURIComponent(permMatch[1])
-    let body = ''
-    req.on('data', c => body += c)
-    await new Promise(r => req.on('end', r))
-    let parsed; try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
-
-    const s = sessions.get(sessionId)
-    if (s && s.waitingForPermission) {
-      const choice = parsed.choice || 'n'  // 'y', 'n', or 'a'
-      s.proc.stdin.write(choice + '\n')
-      s.waitingForPermission = false
-      console.log(`[perm] session:${sessionId.slice(0, 12)} choice:${choice}`)
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
     return
   }
 
