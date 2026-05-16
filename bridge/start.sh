@@ -85,4 +85,24 @@ echo ""
 # Keep alive and show bridge logs
 tail -f /tmp/builtrix-bridge.log &
 
+# Auto-update: poll GitHub every 5 min, restart bridge if server.js changed
+(
+  LAST_SHA=$(git rev-parse HEAD 2>/dev/null)
+  while true; do
+    sleep 300
+    git fetch origin main -q 2>/dev/null
+    NEW_SHA=$(git rev-parse origin/main 2>/dev/null)
+    if [ "$NEW_SHA" != "$LAST_SHA" ]; then
+      echo "[auto-update] New version detected — pulling and restarting..."
+      git reset --hard origin/main -q
+      LAST_SHA=$NEW_SHA
+      kill $BRIDGE_PID 2>/dev/null
+      sleep 1
+      node server.js > /tmp/builtrix-bridge.log 2>&1 &
+      BRIDGE_PID=$!
+      echo "[auto-update] ✓ Bridge restarted (PID $BRIDGE_PID)"
+    fi
+  done
+) &
+
 wait $BRIDGE_PID
