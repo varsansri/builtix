@@ -75,15 +75,26 @@ If anyone asks for snake, dragon, or any live in-chat game — ALWAYS say:
 NEVER say you cannot do it. NEVER create an HTML file for snake requests.
 /dragon IS the working live snake game. It is already built into the chat UI.
 
-INTERACTIVE APPS & GAMES:
-- For ANY game or interactive visual app: create a self-contained HTML file
-- Save it in the session folder (current working directory)
-- The bridge serves it at: [bridge-url]/files/[session-id]/filename.html
-- Tell the user to open that URL in their browser to play/use it
-- Example: snake game → create snake.html with JS canvas, keyboard events, full game logic
-- Example: calculator → create calc.html
-- The HTML file runs entirely in the user's browser with full keyboard/mouse support
-- This is how you make REAL interactive experiences for browser users
+INTERACTIVE APPS & GAMES — UI INJECTION SYSTEM:
+You can inject a LIVE interactive UI directly into the chat for this session.
+It appears as an overlay in the user's chat — no separate tab needed.
+When the user opens a new chat or tab, the overlay auto-disappears. Core UI stays forever.
+
+To inject UI, output EXACTLY this format (nothing else on those marker lines):
+UI_INJECT_START
+<!DOCTYPE html><html>...your full self-contained HTML/JS/CSS here...</html>
+UI_INJECT_END
+
+Rules for injected HTML:
+- Must be 100% self-contained (no external URLs, inline all CSS and JS)
+- Use keyboard event listeners (keydown) for games — they work in the overlay
+- Dark background (#0a0a0a), green (#00ff00) accent to match Builtix style
+- For snake/games: use requestAnimationFrame or setInterval for game loop
+- Speed, score, difficulty — all controllable via JS inside the HTML
+- Include on-screen controls for mobile users (touch buttons for arrow keys)
+
+Example uses: snake game, calculator, drawing canvas, timer, any visual tool
+After injecting, say: "↳ Game loaded — use arrow keys or on-screen buttons to play"
 
 AUDIO: Do NOT use espeak, aplay, mpg123, paplay, or any audio bash commands.
 No audio device exists. If asked to speak: respond in text. The browser speaks it via TTS.
@@ -146,6 +157,7 @@ function spawnClaude(sessionId, s) {
   s.ready = false
   s.outBuf = ''
   s.seenToolIds = new Set()
+  s.uiBuffer = null  // collects UI_INJECT HTML between markers
 
   s.proc = spawn('claude', [
     '-p',
@@ -216,7 +228,23 @@ function onData(sessionId, s, chunk) {
     if (ev.type === 'assistant' && ev.message?.content) {
       for (const block of ev.message.content) {
         if (block.type === 'text' && block.text) {
-          send({ type: 'text', text: block.text })
+          // Handle UI_INJECT markers — buffer HTML between START/END
+          const lines = block.text.split('\n')
+          const filtered = []
+          for (const line of lines) {
+            if (line.trim() === 'UI_INJECT_START') { s.uiBuffer = []; continue }
+            if (line.trim() === 'UI_INJECT_END') {
+              if (s.uiBuffer !== null) {
+                send({ type: 'ui_inject', html: s.uiBuffer.join('\n') })
+                s.uiBuffer = null
+              }
+              continue
+            }
+            if (s.uiBuffer !== null) { s.uiBuffer.push(line); continue }
+            filtered.push(line)
+          }
+          const out = filtered.join('\n')
+          if (out.trim()) send({ type: 'text', text: out })
         }
         if (block.type === 'tool_use' && !s.seenToolIds.has(block.id)) {
           s.seenToolIds.add(block.id)
