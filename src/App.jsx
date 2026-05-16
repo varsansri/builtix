@@ -36,9 +36,9 @@ const YELLOW= '\x1b[33m'
 const PURPLE= '\x1b[35m'
 const RESET = '\x1b[0m'
 
-// highlight every occurrence of "builtrix" in green (case-insensitive)
+// highlight every occurrence of "biyatrix" in green (case-insensitive)
 function highlight(line) {
-  return line.replace(/builtrix/gi, m => `${GREEN}${m}${RESET}\x1b[97m`)
+  return line.replace(/biyatrix/gi, m => `${GREEN}${m}${RESET}\x1b[97m`)
 }
 
 const WELCOME_LINES = [
@@ -50,11 +50,11 @@ const WELCOME_LINES = [
   `${GREEN} ██████╔╝╚██████╔╝██║███████╗██║   ██║██╔╝ ██╗${RESET}`,
   `${GREEN} ╚═════╝  ╚═════╝ ╚═╝╚══════╝╚═╝   ╚═╝╚═╝  ╚═╝${RESET}`,
   '',
-  `${WHITE}> Welcome to ${GREEN}Builtrix${RESET}${WHITE} — build anything from your phone.${RESET}`,
+  `${WHITE}> Welcome to ${GREEN}Biyatrix${RESET}${WHITE} — build anything from your phone.${RESET}`,
   `${DIM}> ─────────────────────────────────${RESET}`,
   `${WHITE}> /help   → all commands & shortcuts${RESET}`,
   `${WHITE}> /ls     → list your files${RESET}`,
-  `${WHITE}> 🎙 VOICE → speak your task to ${GREEN}Builtrix${RESET}`,
+  `${WHITE}> 🎙 VOICE → speak your task to ${GREEN}Biyatrix${RESET}`,
   `${DIM}> ─────────────────────────────────${RESET}`,
   '',
 ]
@@ -213,7 +213,52 @@ export default function App() {
 
     const ro = new ResizeObserver(() => fit.fit())
     ro.observe(termRef.current)
-    return () => { ro.disconnect(); term.dispose() }
+
+    // Smooth touch scroll — xterm only handles wheel, not touch swipe
+    let touchStartY = 0
+    let lastY = 0
+    let velocity = 0
+    let rafId = null
+
+    function onTouchStart(e) {
+      touchStartY = e.touches[0].clientY
+      lastY = touchStartY
+      velocity = 0
+      if (rafId) cancelAnimationFrame(rafId)
+    }
+
+    function onTouchMove(e) {
+      const y = e.touches[0].clientY
+      const dy = lastY - y
+      lastY = y
+      velocity = dy
+      term.scrollLines(Math.round(dy / 18))
+    }
+
+    function onTouchEnd() {
+      // momentum scroll
+      function momentum() {
+        if (Math.abs(velocity) < 0.5) return
+        term.scrollLines(Math.round(velocity / 18))
+        velocity *= 0.85
+        rafId = requestAnimationFrame(momentum)
+      }
+      rafId = requestAnimationFrame(momentum)
+    }
+
+    const el = termRef.current
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+
+    return () => {
+      ro.disconnect()
+      term.dispose()
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+      if (rafId) cancelAnimationFrame(rafId)
+    }
   }, [])
 
   // ── Terminal write helpers ──────────────────────────────────────────
@@ -671,7 +716,7 @@ export default function App() {
               srcDoc={uiOverlay}
               style={styles.uiFrame}
               sandbox="allow-scripts"
-              title="builtix-ui"
+              title="biyatrix-ui"
             />
           </div>
         )}
