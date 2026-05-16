@@ -173,7 +173,7 @@ function spawnClaude(sessionId, s) {
     '--output-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'acceptEdits',
-    '--allowedTools', 'Bash,Write,Read,Edit,Glob,Grep',
+    '--allowedTools', 'Bash,Write,Read,Edit,Glob,Grep,WebFetch,WebSearch',
     '--append-system-prompt', SYSTEM_APPEND,
   ], {
     cwd: s.sd || __dirname,
