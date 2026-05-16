@@ -17,6 +17,12 @@ async function sessionDir(id) {
   return d
 }
 
+// ── ANSI strip ───────────────────────────────────────────────────────
+
+function stripAnsi(str) {
+  return str.replace(/\x1b\[[0-9;]*[mGKHFJA-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '')
+}
+
 // ── Live bash streaming ──────────────────────────────────────────────
 
 function streamBashLive(command, cwd, send) {
@@ -158,6 +164,8 @@ function spawnClaude(sessionId, s) {
   s.outBuf = ''
   s.seenToolIds = new Set()
   s.uiBuffer = null  // collects UI_INJECT HTML between markers
+  s.stderrBuf = ''
+  s.waitingForPermission = false
 
   s.proc = spawn('claude', [
     '-p',
@@ -176,8 +184,41 @@ function spawnClaude(sessionId, s) {
   const tag = sessionId.slice(0, 12)
   s.proc.stdout.on('data', chunk => onData(sessionId, s, chunk))
   s.proc.stderr.on('data', d => {
-    const t = d.toString().trim()
+    const raw = d.toString()
+    const t = stripAnsi(raw).trim()
     if (t && !t.includes('Warning') && !t.includes('stdin')) console.error(`[cc:${tag}]`, t)
+
+    // Accumulate stderr to detect permission prompts
+    s.stderrBuf += stripAnsi(raw)
+    // Trim buffer to avoid unbounded growth
+    if (s.stderrBuf.length > 4000) s.stderrBuf = s.stderrBuf.slice(-2000)
+
+    if (!s.waitingForPermission && s.active) {
+      const buf = s.stderrBuf
+      // Claude Code permission prompt indicators
+      const isPermPrompt = (
+        buf.includes('Yes, allow') ||
+        buf.includes('No, don') ||
+        (buf.includes('Allow') && buf.includes('?')) ||
+        buf.includes('Do you want to allow')
+      )
+      if (isPermPrompt) {
+        s.waitingForPermission = true
+        s.stderrBuf = ''
+        // Extract command context from buffer if present
+        const cmdMatch = buf.match(/Command:\s*(.+)/i) || buf.match(/run[:\s]+(.+)/i)
+        const cmdHint = cmdMatch ? cmdMatch[1].trim().slice(0, 80) : ''
+        s.active.send({
+          type: 'permission_request',
+          hint: cmdHint,
+          options: [
+            { label: 'Yes, allow once', value: 'y' },
+            { label: 'Always allow this session', value: 'a' },
+            { label: 'No, deny', value: 'n' },
+          ]
+        })
+      }
+    }
   })
   s.proc.on('exit', code => {
     console.log(`[bridge] ${tag} exited (${code})`)
@@ -383,6 +424,27 @@ const server = http.createServer(async (req, res) => {
     })
 
     if (!res.destroyed) res.end()
+    return
+  }
+
+  // ── Permission response — /api/permission/:sessionId ─────────────────
+  const permMatch = req.url?.match(/^\/api\/permission\/(.+)$/)
+  if (req.method === 'POST' && permMatch) {
+    const sessionId = decodeURIComponent(permMatch[1])
+    let body = ''
+    req.on('data', c => body += c)
+    await new Promise(r => req.on('end', r))
+    let parsed; try { parsed = JSON.parse(body) } catch { res.writeHead(400); res.end(); return }
+
+    const s = sessions.get(sessionId)
+    if (s && s.waitingForPermission) {
+      const choice = parsed.choice || 'n'  // 'y', 'n', or 'a'
+      s.proc.stdin.write(choice + '\n')
+      s.waitingForPermission = false
+      console.log(`[perm] session:${sessionId.slice(0, 12)} choice:${choice}`)
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
     return
   }
 

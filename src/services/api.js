@@ -28,6 +28,18 @@ export async function detectBridge() {
   return false  // will fall back to Vercel API
 }
 
+export async function sendPermissionChoice(sessionId, choice) {
+  const base = _bridgeUrl || ''
+  if (!base) return
+  try {
+    await fetch(`${base}/api/permission/${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ choice }),
+    })
+  } catch {}
+}
+
 // Stream a chat request.
 // When bridge is live → use it (Claude Code on developer's phone).
 // When bridge is offline → silently fall back to Vercel/Groq (same SSE format).

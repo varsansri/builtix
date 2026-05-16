@@ -9,7 +9,7 @@ import ExtraKeysBar from './components/ExtraKeysBar.jsx'
 import InputBar from './components/InputBar.jsx'
 import ActionBar from './components/ActionBar.jsx'
 
-import { streamChat, detectBridge, isBridgeActive } from './services/api.js'
+import { streamChat, detectBridge, isBridgeActive, sendPermissionChoice } from './services/api.js'
 import { startRecording, stopRecording, isVoiceSupported } from './services/voice.js'
 import { parseCommand, getHelpText } from './utils/commandParser.js'
 import { TERMINAL_THEME } from './constants/theme.js'
@@ -131,6 +131,7 @@ export default function App() {
   const [histIdx, setHistIdx] = useState(-1)
   const [copyToast, setCopyToast] = useState('')
   const [selectMode, setSelectMode] = useState(false)
+  const [permRequest, setPermRequest] = useState(null)  // { hint, options, sessionId }
 
   // keep refs in sync
   useEffect(() => { tabsRef.current = tabs }, [tabs])
@@ -497,6 +498,10 @@ export default function App() {
               setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
             }
             break
+          case 'permission_request':
+            write(`⚠ Permission needed${event.hint ? `: ${event.hint}` : ''}`)
+            setPermRequest({ hint: event.hint, options: event.options, sessionId: tab.id })
+            break
           case 'ui_inject':
             setUiOverlay(event.html)
             write('↳ UI loaded — interactive overlay is live')
@@ -537,6 +542,13 @@ export default function App() {
     write('⚠ Stopped.')
     setIsRunning(false)
     setTaskName('')
+  }
+
+  async function handlePermChoice(choice, label) {
+    if (!permRequest) return
+    setPermRequest(null)
+    write(`→ ${label}`)
+    await sendPermissionChoice(permRequest.sessionId, choice)
   }
 
   function handleMic() {
@@ -675,6 +687,28 @@ export default function App() {
             />
           </div>
         )}
+        {permRequest && (
+          <div style={styles.permOverlay}>
+            <div style={styles.permBox}>
+              <div style={styles.permTitle}>⚠ Permission Required</div>
+              {permRequest.hint && <div style={styles.permHint}>{permRequest.hint}</div>}
+              <div style={styles.permButtons}>
+                {permRequest.options.map(opt => (
+                  <button
+                    key={opt.value}
+                    style={{
+                      ...styles.permBtn,
+                      ...(opt.value === 'n' ? styles.permBtnDeny : styles.permBtnAllow),
+                    }}
+                    onPointerDown={e => { e.preventDefault(); handlePermChoice(opt.value, opt.label) }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
         {selectMode && (
           <div style={styles.selectOverlay}>
             <pre style={styles.selectText}>
@@ -810,5 +844,60 @@ const styles = {
     padding: '2px 8px',
     cursor: 'pointer',
     letterSpacing: 0.5,
+  },
+  permOverlay: {
+    position: 'absolute', inset: 0,
+    background: 'rgba(0,0,0,0.75)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 300,
+    backdropFilter: 'blur(4px)',
+    WebkitBackdropFilter: 'blur(4px)',
+  },
+  permBox: {
+    background: '#0d1f0d',
+    border: '1px solid rgba(0,255,0,0.35)',
+    borderRadius: 14,
+    padding: '18px 20px',
+    maxWidth: 320,
+    width: '90%',
+  },
+  permTitle: {
+    color: '#ffcc00',
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13,
+    fontWeight: 700,
+    marginBottom: 8,
+  },
+  permHint: {
+    color: 'rgba(255,255,255,0.55)',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    marginBottom: 14,
+    wordBreak: 'break-all',
+  },
+  permButtons: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  permBtn: {
+    border: 'none',
+    borderRadius: 10,
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 13,
+    fontWeight: 600,
+    padding: '10px 16px',
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  permBtnAllow: {
+    background: 'rgba(0,255,0,0.12)',
+    color: '#00ff00',
+    border: '1px solid rgba(0,255,0,0.3)',
+  },
+  permBtnDeny: {
+    background: 'rgba(255,50,50,0.1)',
+    color: '#ff6666',
+    border: '1px solid rgba(255,50,50,0.25)',
   },
 }
