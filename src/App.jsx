@@ -519,6 +519,7 @@ export default function App() {
     const controller = new AbortController()
     abortRef.current = controller
     let assistantText = ''
+    let streamLine = ''
 
     await streamChat({
       messages: newConvo,
@@ -526,8 +527,34 @@ export default function App() {
       signal: controller.signal,
       onEvent: (event) => {
         switch (event.type) {
-          case 'text':
-            // text may be a single line or a multi-line block — handle both
+          case 'stream': {
+            xtermRef.current?.write(event.text)
+            for (const ch of event.text) {
+              if (ch === '\n') {
+                assistantText += streamLine + '\n'
+                if (streamLine.startsWith('⟹')) decisionLog.current.push(streamLine)
+                ttsSpeak(streamLine)
+                const captured = streamLine
+                setTabs(prev => prev.map(t =>
+                  t.id === activeTabIdRef.current ? { ...t, lines: [...t.lines, colorize(captured)] } : t
+                ))
+                streamLine = ''
+              } else {
+                streamLine += ch
+              }
+            }
+            break
+          }
+          case 'text': {
+            if (streamLine) {
+              xtermRef.current?.write('\r\n')
+              assistantText += streamLine + '\n'
+              const captured = streamLine
+              setTabs(prev => prev.map(t =>
+                t.id === activeTabIdRef.current ? { ...t, lines: [...t.lines, colorize(captured)] } : t
+              ))
+              streamLine = ''
+            }
             event.text.split('\n').forEach(l => {
               write(l)
               assistantText += l + '\n'
@@ -538,6 +565,7 @@ export default function App() {
               setTaskName(event.text.replace('●', '').replace(/\.\.\.$/, '').trim().slice(0, 28))
             }
             break
+          }
           case 'ui_inject':
             setUiOverlay(event.html)
             write('↳ UI loaded — interactive overlay is live')
@@ -558,12 +586,22 @@ export default function App() {
           case 'error':
             termWrite(`\x1b[31m${event.text}\x1b[0m`)
             break
-          case 'done':
+          case 'done': {
+            if (streamLine) {
+              xtermRef.current?.write('\r\n')
+              assistantText += streamLine + '\n'
+              const captured = streamLine
+              setTabs(prev => prev.map(t =>
+                t.id === activeTabIdRef.current ? { ...t, lines: [...t.lines, colorize(captured)] } : t
+              ))
+              streamLine = ''
+            }
             updateActiveConversation([...newConvo, { role: 'assistant', content: assistantText.trim() }])
             setIsRunning(false)
             setTaskName('')
             writeDivider()
             break
+          }
         }
       },
       onError: (err) => {
