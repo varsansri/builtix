@@ -212,6 +212,15 @@ function spawnClaude(sessionId, s) {
     setTimeout(() => { if (sessions.has(sessionId)) spawnClaude(sessionId, s) }, 2000)
   })
 
+  // Fallback: mark ready after 5s if system init never fires
+  setTimeout(() => {
+    if (!s.ready && sessions.has(sessionId)) {
+      console.log(`[bridge] ${tag} ready (fallback) ✓`)
+      s.ready = true
+      drain(sessionId, s)
+    }
+  }, 5000)
+
   console.log(`[bridge] ${tag} starting…`)
 }
 
