@@ -260,9 +260,11 @@ function onData(sessionId, s, chunk) {
     if (ev.type === 'assistant' && ev.message?.content) {
       for (const block of ev.message.content) {
         if (block.type === 'text' && block.text) {
-          // Regular text was already streamed live via content_block_delta
-          // Only handle UI_INJECT here
-          if (s.inUiInject || s.uiBuffer !== null || block.text.includes('UI_INJECT_START')) {
+          const hasUiInject = block.text.includes('UI_INJECT_START')
+          const wasStreamed = s.deltaAccum.length > 0
+
+          if (hasUiInject || s.uiBuffer !== null) {
+            // Handle UI inject from full text block
             const lines = block.text.split('\n')
             for (const line of lines) {
               if (line.trim() === 'UI_INJECT_START') { s.uiBuffer = []; continue }
@@ -275,7 +277,12 @@ function onData(sessionId, s, chunk) {
               }
               if (s.uiBuffer !== null) { s.uiBuffer.push(line); continue }
             }
+          } else if (!wasStreamed) {
+            // Fallback: deltas never fired, send full text now
+            const out = block.text.trim()
+            if (out) send({ type: 'text', text: out })
           }
+
           s.inUiInject = false
           s.deltaAccum = ''
         }
