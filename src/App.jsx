@@ -124,6 +124,8 @@ export default function App() {
   const [ttsOn, setTtsOn] = useState(() => localStorage.getItem('bx_tts') === '1')
   const ttsOnRef = useRef(false)
   const [attachment, setAttachment] = useState(null)
+  const [thumbnail, setThumbnail] = useState(null)       // { url, name } for image preview
+  const uploadedUrlsRef = useRef([])                     // track uploads for cleanup on close
   const [histIdx, setHistIdx] = useState(-1)
   const [copyToast, setCopyToast] = useState('')
   const [selectMode, setSelectMode] = useState(false)
@@ -132,6 +134,20 @@ export default function App() {
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
   useEffect(() => { ttsOnRef.current = ttsOn }, [ttsOn])
+
+  // delete uploaded files from Vercel Blob when the tab closes
+  useEffect(() => {
+    const cleanup = () => {
+      const urls = uploadedUrlsRef.current
+      if (!urls.length) return
+      navigator.sendBeacon('/api/cleanup', new Blob(
+        [JSON.stringify({ urls })],
+        { type: 'application/json' }
+      ))
+    }
+    window.addEventListener('beforeunload', cleanup)
+    return () => window.removeEventListener('beforeunload', cleanup)
+  }, [])
 
   function ttsSpeak(text) {
     if (!ttsOnRef.current || !text?.trim()) return
@@ -506,8 +522,15 @@ export default function App() {
     const tab = getActiveTab()
     let content = userText
     if (attachment) {
-      content = `File: ${attachment.name}\n\n${attachment.content}\n\nTask: ${userText}`
+      if (attachment.kind === 'text') {
+        content = `File: ${attachment.name}\n\n${attachment.content}\n\nTask: ${userText}`
+      } else if (attachment.kind === 'image') {
+        content = `[Image: ${attachment.name}]\nURL: ${attachment.url}\n\nTask: ${userText}`
+      } else {
+        content = `[File: ${attachment.name}]\nURL: ${attachment.url}\n\nTask: ${userText}`
+      }
       setAttachment(null)
+      setThumbnail(null)
     }
 
     const newConvo = [...tab.conversation, { role: 'user', content }]
@@ -646,13 +669,56 @@ export default function App() {
   async function handleAttach() {
     const el = document.createElement('input')
     el.type = 'file'
-    el.accept = '.txt,.py,.js,.ts,.jsx,.tsx,.json,.csv,.md,.html,.css,.sh,.env,.log,.yaml,.toml'
+    el.accept = '*/*'
     el.onchange = async (e) => {
       const file = e.target.files?.[0]
       if (!file) return
-      const text = await file.text()
-      setAttachment({ name: file.name, content: text })
-      write(`📎 Attached: ${file.name} (${(file.size / 1024).toFixed(1)}KB)`)
+
+      const sizeKB = (file.size / 1024).toFixed(1)
+      const isImage = file.type.startsWith('image/')
+      const isSmallText = file.size < 80 * 1024 && (
+        file.type.startsWith('text/') ||
+        /\.(txt|py|js|ts|jsx|tsx|json|csv|md|html|css|sh|yaml|toml|env|log)$/i.test(file.name)
+      )
+
+      // Small text files: read inline, no upload needed
+      if (isSmallText) {
+        const text = await file.text()
+        setAttachment({ name: file.name, kind: 'text', content: text })
+        write(`📎 Attached: ${file.name} (${sizeKB}KB)`)
+        return
+      }
+
+      // All other files (images, PDFs, videos, large files): upload to Vercel Blob
+      write(`📎 Uploading ${file.name} (${sizeKB}KB)...`)
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result.split(',')[1])
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: file.name, type: file.type || 'application/octet-stream', data: base64 }),
+        })
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: res.statusText }))
+          throw new Error(err.error || res.statusText)
+        }
+
+        const { url } = await res.json()
+        uploadedUrlsRef.current = [...uploadedUrlsRef.current, url]
+
+        setAttachment({ name: file.name, kind: isImage ? 'image' : 'file', url })
+        if (isImage) setThumbnail({ url, name: file.name })
+        write(`✓ ${file.name} ready`)
+      } catch (err) {
+        write(`✗ Upload failed: ${err.message}`)
+      }
     }
     el.click()
   }
@@ -762,6 +828,16 @@ export default function App() {
           </div>
         )}
       </div>
+      {thumbnail && (
+        <div style={styles.thumbStrip}>
+          <img src={thumbnail.url} alt={thumbnail.name} style={styles.thumbImg} />
+          <span style={styles.thumbName}>{thumbnail.name}</span>
+          <button style={styles.thumbClose} onPointerDown={() => {
+            setThumbnail(null)
+            setAttachment(null)
+          }}>✕</button>
+        </div>
+      )}
       <ExtraKeysBar onKey={handleExtraKey} selectMode={selectMode} />
       <InputBar
         ref={inputRef}
@@ -889,5 +965,39 @@ const styles = {
     padding: '2px 8px',
     cursor: 'pointer',
     letterSpacing: 0.5,
+  },
+  thumbStrip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '4px 10px',
+    background: 'rgba(0,0,0,0.6)',
+    borderTop: '1px solid rgba(0,255,65,0.15)',
+  },
+  thumbImg: {
+    width: 48,
+    height: 48,
+    objectFit: 'cover',
+    borderRadius: 4,
+    border: '1px solid rgba(0,255,65,0.3)',
+    flexShrink: 0,
+  },
+  thumbName: {
+    flex: 1,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.6)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  thumbClose: {
+    background: 'transparent',
+    border: 'none',
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 13,
+    cursor: 'pointer',
+    padding: '2px 4px',
+    flexShrink: 0,
   },
 }

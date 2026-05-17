@@ -4,7 +4,9 @@
   "framework": "vite",
   "functions": {
     "api/chat.js": { "maxDuration": 60 },
-    "api/transcribe.js": { "maxDuration": 60 }
+    "api/transcribe.js": { "maxDuration": 60 },
+    "api/upload.js": { "maxDuration": 30 },
+    "api/cleanup.js": { "maxDuration": 10 }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
