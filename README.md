@@ -1,8 +1,8 @@
-# ⬛ Builtix
+# ⬛ Biyatrix
 
 **Build anything from your phone. Mobile-first AI terminal.**
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/varsansri/builtix&env=GROQ_KEY_1,GROQ_KEY_2,GROQ_KEY_3,GROQ_KEY_4&envDescription=Groq%20API%20keys%20for%20auto-rotation%20when%20one%20hits%20rate%20limits&envLink=https://console.groq.com/keys&project-name=builtix&repository-name=builtix-deploy)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/varsansri/biyatrix&env=GROQ_KEY_1,GROQ_KEY_2,GROQ_KEY_3,GROQ_KEY_4&envDescription=Groq%20API%20keys%20for%20auto-rotation%20when%20one%20hits%20rate%20limits&envLink=https://console.groq.com/keys&project-name=biyatrix&repository-name=biyatrix-deploy)
 
 ---
 
@@ -17,7 +17,7 @@ Your live URL will be `builtix-xxxx.vercel.app`
 
 ---
 
-## What Builtix can do
+## What Biyatrix can do
 
 - Read, write, edit files
 - Run bash commands
