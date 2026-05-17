@@ -176,7 +176,9 @@ function spawnClaude(sessionId, s) {
   s.ready = false
   s.outBuf = ''
   s.seenToolIds = new Set()
-  s.uiBuffer = null  // collects UI_INJECT HTML between markers
+  s.uiBuffer = null
+  s.inUiInject = false
+  s.deltaAccum = ''
 
   s.proc = spawn('claude', [
     '-p',
@@ -244,26 +246,41 @@ function onData(sessionId, s, chunk) {
 
     if (ev.type === 'rate_limit_event') continue
 
+    // Stream individual tokens live as Claude generates them
+    if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+      const text = ev.delta.text || ''
+      s.deltaAccum += text
+      if (!s.inUiInject) {
+        if (s.deltaAccum.includes('UI_INJECT_START')) {
+          s.inUiInject = true
+        } else if (text) {
+          send({ type: 'stream', text })
+        }
+      }
+      continue
+    }
+
     if (ev.type === 'assistant' && ev.message?.content) {
       for (const block of ev.message.content) {
         if (block.type === 'text' && block.text) {
-          // Handle UI_INJECT markers — buffer HTML between START/END
-          const lines = block.text.split('\n')
-          const filtered = []
-          for (const line of lines) {
-            if (line.trim() === 'UI_INJECT_START') { s.uiBuffer = []; continue }
-            if (line.trim() === 'UI_INJECT_END') {
-              if (s.uiBuffer !== null) {
-                send({ type: 'ui_inject', html: s.uiBuffer.join('\n') })
-                s.uiBuffer = null
+          // Regular text was already streamed live via content_block_delta
+          // Only handle UI_INJECT here
+          if (s.inUiInject || s.uiBuffer !== null || block.text.includes('UI_INJECT_START')) {
+            const lines = block.text.split('\n')
+            for (const line of lines) {
+              if (line.trim() === 'UI_INJECT_START') { s.uiBuffer = []; continue }
+              if (line.trim() === 'UI_INJECT_END') {
+                if (s.uiBuffer !== null) {
+                  send({ type: 'ui_inject', html: s.uiBuffer.join('\n') })
+                  s.uiBuffer = null
+                }
+                continue
               }
-              continue
+              if (s.uiBuffer !== null) { s.uiBuffer.push(line); continue }
             }
-            if (s.uiBuffer !== null) { s.uiBuffer.push(line); continue }
-            filtered.push(line)
           }
-          const out = filtered.join('\n')
-          if (out.trim()) send({ type: 'text', text: out })
+          s.inUiInject = false
+          s.deltaAccum = ''
         }
         if (block.type === 'tool_use' && !s.seenToolIds.has(block.id)) {
           s.seenToolIds.add(block.id)
@@ -411,3 +428,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`✓ Builtrix bridge v5.0 on http://localhost:${PORT}`)
 })
+
