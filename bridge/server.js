@@ -212,8 +212,6 @@ function spawnClaude(sessionId, s) {
     setTimeout(() => { if (sessions.has(sessionId)) spawnClaude(sessionId, s) }, 2000)
   })
 
-  // Warmup: trigger init handshake
-  writeMsg(s, { type: 'user', message: { role: 'user', content: [{ type: 'text', text: '.' }] } })
   console.log(`[bridge] ${tag} starting…`)
 }
 
@@ -231,13 +229,12 @@ function onData(sessionId, s, chunk) {
     let ev; try { ev = JSON.parse(line) } catch { continue }
 
     if (ev.type === 'system' && ev.subtype === 'init') {
-      console.log(`[bridge] ${sessionId.slice(0, 12)} session:`, ev.session_id); continue
-    }
-
-    if (!s.ready && ev.type === 'result') {
-      s.ready = true
-      console.log(`[bridge] ${sessionId.slice(0, 12)} ready ✓`)
-      drain(sessionId, s)
+      console.log(`[bridge] ${sessionId.slice(0, 12)} session:`, ev.session_id)
+      if (!s.ready) {
+        s.ready = true
+        console.log(`[bridge] ${sessionId.slice(0, 12)} ready ✓`)
+        drain(sessionId, s)
+      }
       continue
     }
 
