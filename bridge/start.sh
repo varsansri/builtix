@@ -30,11 +30,12 @@ if ! command -v cloudflared &>/dev/null; then
   }
 fi
 
-# Kill old instances
-pkill -f "node server.js" 2>/dev/null
-pkill -f "cloudflared tunnel" 2>/dev/null
+# Kill ALL old instances cleanly
+pkill -9 -f "node server.js" 2>/dev/null
+pkill -9 -f "cloudflared tunnel" 2>/dev/null
+pkill -9 -f "tail.*biyatrix" 2>/dev/null
 rm -f "$TUNNEL_DIR"/*.{log,pid,url}
-sleep 1
+sleep 2
 
 # Start bridge server
 echo "Starting bridge server..."
