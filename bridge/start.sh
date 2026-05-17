@@ -2,7 +2,7 @@
 # Biyatrix Bridge — run this in Termux to power the website for everyone
 
 BRIDGE_TOKEN="${BRIDGE_TOKEN:-biyatrix-bridge}"
-REGISTRY="https://builtix.vercel.app/api/bridge-url"
+REGISTRY="https://biyatrix.vercel.app/api/bridge-url"
 PORT="${PORT:-3001}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
